@@ -26,6 +26,10 @@ quant = ["bitsandbytes>=0.43"]
 # Schema-constrained JSON decoding for extraction tasks. lm-format-enforcer does not
 # support transformers 5 yet, so this extra pins transformers 4.x.
 constrained = ["lm-format-enforcer>=0.10", "transformers>=4.56,<5"]
+# Encryption at rest for gateway logs.
+security = ["cryptography>=42"]
+# Postgres instead of SQLite (several gateway machines).
+postgres = ["psycopg[binary]>=3.1"]
 # Live connection (M6).
 gateway = [
     "fastapi>=0.115",
@@ -36,7 +40,7 @@ gateway = [
 distiller = "distiller.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff==0.17.3", "cryptography>=42", "psycopg[binary]>=3.1", "pgserver>=0.1; python_version < '3.13'"]
 
 [build-system]
 requires = ["hatchling"]
