@@ -256,6 +256,72 @@ def task_mode(
     print(f"{task} -> {mode}")
 
 
+@task_app.command("discover")
+def task_discover(
+    config: Path = CONFIG,
+    min_calls: int = typer.Option(100, help="Ignore prompt groups with fewer logged answers"),
+    write: Path = typer.Option(None, help="Write <dir>/<name>/task.yaml + data.jsonl per proposal"),
+    adopt: bool = typer.Option(False, help="Also move the group's logged calls to the new name"),
+) -> None:
+    """Find repeated untagged prompts that could become tasks."""
+    from distiller.gateway.config import GatewayConfig
+    from distiller.tasks import discover as disc
+
+    cfg = GatewayConfig.load(config)
+    store = cfg.open_store()
+    found = disc.discover(store, min_calls=min_calls, taken=set(cfg.tasks))
+    if not found:
+        print(f"No untagged prompt group has {min_calls}+ logged teacher answers yet.")
+        return
+    for c in found:
+        mark = "proposed" if c.proposed else "skipped"
+        print(f"{c.group}  {c.calls} calls  -> {mark}: {c.type or '-'} ({c.reason})")
+        print(f"    name: {c.name}   prompt: {c.system_prompt[:70]!r}")
+        if c.labels:
+            print(
+                f"    labels ({len(c.labels)}): {', '.join(c.labels[:8])}{' ...' if len(c.labels) > 8 else ''}"
+            )
+        if not c.proposed:
+            continue
+        if write:
+            path = disc.write_candidate(store, c, write)
+            print(f"    wrote {path}")
+        if adopt:
+            print(f"    moved {disc.adopt(store, c)} calls to task {c.name}")
+            print(
+                f"    add to distiller.yaml:  tasks: {{{c.name}: "
+                f"{{mode: observe, match_system_prompt: {c.match_system_prompt!r}}}}}"
+            )
+
+
+@app.command()
+def retrain(task: str = typer.Argument(...), config: Path = CONFIG) -> None:
+    """Queue a retrain of a task on its original data plus logged traffic."""
+    from distiller.gateway.config import GatewayConfig
+
+    job = GatewayConfig.load(config).open_store().enqueue_retrain(task, "cli")
+    print(f"Queued job {job}" if job else f"A retrain for {task} is already queued or running")
+
+
+@app.command("retrain-worker")
+def retrain_worker(
+    config: Path = CONFIG,
+    once: bool = typer.Option(False, help="Run at most one job, then exit"),
+    poll: float = typer.Option(30, help="Seconds between queue checks"),
+) -> None:
+    """Run queued retrain jobs (on a machine that can train; a GPU for LLM students)."""
+    from distiller.automation.retrain import work_once, worker_loop
+    from distiller.gateway.config import GatewayConfig
+
+    cfg = GatewayConfig.load(config)
+    store = cfg.open_store()
+    if once:
+        job = work_once(cfg, store)
+        print("No queued jobs" if job is None else f"{job['status']}: {job['detail']}")
+    else:
+        worker_loop(cfg, store, poll_seconds=poll)
+
+
 # ---------- keys ----------
 
 

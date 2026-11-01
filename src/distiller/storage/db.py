@@ -55,6 +55,16 @@ CREATE TABLE IF NOT EXISTS api_keys (
     revoked_ts {FLOAT},
     last_used_ts {FLOAT}
 );
+CREATE TABLE IF NOT EXISTS retrain_jobs (
+    id {ID},
+    task TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    detail TEXT,
+    created_ts {FLOAT} NOT NULL,
+    started_ts {FLOAT},
+    finished_ts {FLOAT}
+);
 """
 
 # Columns added after the first release: added to existing databases on start-up.
@@ -406,6 +416,59 @@ class Store:
                 "SELECT 1 AS x FROM api_keys WHERE role = 'admin' AND revoked_ts IS NULL LIMIT 1",
                 fetch="one",
             )
+        )
+
+    # ---------- retrain jobs ----------
+
+    def enqueue_retrain(self, task: str, reason: str) -> int | None:
+        """Queue a retrain unless one is already queued or running for the task."""
+        busy = self._run(
+            "SELECT id FROM retrain_jobs WHERE task = ? AND status IN ('queued', 'running')",
+            (task,),
+            fetch="one",
+        )
+        if busy:
+            return None
+        row = self._run(
+            "INSERT INTO retrain_jobs (task, status, reason, created_ts) VALUES (?, 'queued', ?, ?) "
+            "RETURNING id",
+            (task, reason, time.time()),
+            fetch="one",
+        )
+        self.add_event(task, "retrain", f"queued ({reason})")
+        return row["id"]
+
+    def claim_retrain(self) -> dict[str, Any] | None:
+        """Take the oldest queued job; safe when several workers poll at once."""
+        while True:
+            job = self._run(
+                "SELECT * FROM retrain_jobs WHERE status = 'queued' ORDER BY id LIMIT 1",
+                fetch="one",
+            )
+            if job is None:
+                return None
+            won = self._run(
+                "UPDATE retrain_jobs SET status = 'running', started_ts = ? "
+                "WHERE id = ? AND status = 'queued'",
+                (time.time(), job["id"]),
+                fetch="rowcount",
+            )
+            if won:
+                job["status"] = "running"
+                return job
+
+    def finish_retrain(self, job_id: int, status: str, detail: str) -> None:
+        self._run(
+            "UPDATE retrain_jobs SET status = ?, detail = ?, finished_ts = ? WHERE id = ?",
+            (status, detail, time.time(), job_id),
+        )
+        task = self._run("SELECT task FROM retrain_jobs WHERE id = ?", (job_id,), fetch="one")
+        if task:
+            self.add_event(task["task"], "retrain", f"{status}: {detail}")
+
+    def retrain_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
+        return self._run(
+            "SELECT * FROM retrain_jobs ORDER BY id DESC LIMIT ?", (limit,), fetch="all"
         )
 
 

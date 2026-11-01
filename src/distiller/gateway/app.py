@@ -159,23 +159,53 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         transport=transport,
     )
 
-    def load_students() -> None:
+    loaded_from: dict[str, str] = {}  # task -> model_dir currently loaded
+
+    def load_one(name: str, force: bool = False) -> bool:
+        """(Re)load a task's student if its model_dir changed. True if a new model loaded."""
         from distiller.serving.registry import load_student
 
-        for name, settings in config.tasks.items():
-            model_dir = _resolve_model_dir(name, settings)
-            if not model_dir:
-                continue
-            try:
-                students[name] = load_student(model_dir, settings.serving)
-                log.info("loaded student for %s from %s", name, model_dir)
-            except Exception:  # a broken model must not stop the gateway
-                log.exception("could not load student for %s; task stays teacher-only", name)
+        settings = config.tasks[name]
+        model_dir = _resolve_model_dir(name, settings)
+        if not model_dir or (not force and loaded_from.get(name) == str(model_dir)):
+            return False
+        try:
+            new = load_student(model_dir, settings.serving)
+        except Exception:  # a broken model must not stop the gateway or replace a good one
+            log.exception("could not load student for %s from %s", name, model_dir)
+            return False
+        reloading = name in students
+        students[name] = new  # swap: requests in flight keep the old object
+        loaded_from[name] = str(model_dir)
+        log.info("loaded student for %s from %s", name, model_dir)
+        if reloading:
+            # Start fresh drift/promotion windows for the new model (once across instances).
+            best = settings.runs_dir / name / "best.json"
+            if store.mode_changed_at(name) < (best.stat().st_mtime if best.exists() else 0):
+                store.set_mode(name, mode_of(name).value, reason=f"new model {model_dir}")
+        return True
+
+    def load_students() -> None:
+        for name in config.tasks:
+            load_one(name)
+
+    async def watch_models():
+        """Pick up new best.json files written by `distiller train` or the retrain worker."""
+        while True:
+            await asyncio.sleep(config.retrain.reload_seconds)
+            for name, settings in config.tasks.items():
+                if str(settings.model_dir) == "best":
+                    try:
+                        await run_in_threadpool(load_one, name)
+                    except Exception:
+                        log.exception("model reload check failed for %s", name)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await run_in_threadpool(load_students)
+        watcher = asyncio.create_task(watch_models())
         yield
+        watcher.cancel()
         await teacher.aclose()
 
     app = FastAPI(title="Distiller gateway", lifespan=lifespan)
@@ -289,8 +319,19 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
                 student_ms=ms,
                 agree=agree,
             )
+            maybe_promote(task)
         except Exception:
             log.exception("shadow comparison failed for %s", task)
+
+    def maybe_promote(task: str) -> None:
+        p = config.promote
+        if not p.enabled:
+            return
+        samples, agreement = store.recent_agreement(task, p.window, audited_only=False)
+        if samples >= p.min_samples and agreement >= p.min_agreement:
+            reason = f"auto-promoted: shadow agreement {agreement:.1%} over {samples} requests"
+            if store.set_mode(task, Mode.serve.value, reason=reason, expect=Mode.shadow.value):
+                log.warning("task %s %s", task, reason)
 
     async def audit(task: str, call_id: int, body: dict, headers: dict, output: Any):
         try:
@@ -303,6 +344,8 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
             store.update_call(call_id, **fields)
             if check_drift(store, config, task):
                 log.warning("task %s auto-demoted to shadow", task)
+                if config.retrain.enabled:
+                    store.enqueue_retrain(task, "drift demotion")
         except Exception:
             log.exception("audit failed for %s", task)
 
@@ -458,6 +501,42 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         store.set_mode(task, mode.value, reason="admin api")
         return {"task": task, "mode": mode.value}
 
+    @app.post("/admin/tasks/{task}/reload")
+    async def reload_task(task: str, request: Request):
+        require_admin(request)
+        if task not in config.tasks:
+            raise HTTPException(404, detail={"error": {"message": f"unknown task {task}"}})
+        loaded = await run_in_threadpool(load_one, task, True)
+        return {"task": task, "reloaded": loaded, "model_dir": loaded_from.get(task)}
+
+    @app.post("/admin/tasks/{task}/retrain")
+    async def queue_retrain(task: str, request: Request):
+        require_admin(request)
+        job = store.enqueue_retrain(task, "admin api")
+        return {"task": task, "queued": job is not None, "job_id": job}
+
+    @app.get("/admin/discover")
+    def discover_tasks(request: Request, min_calls: int = 50):
+        from distiller.tasks.discover import discover
+
+        require_admin(request)
+        found = discover(store, min_calls=min_calls, taken=set(config.tasks))
+        return {
+            "candidates": [
+                {
+                    "group": c.group,
+                    "calls": c.calls,
+                    "type": c.type,
+                    "reason": c.reason,
+                    "name": c.name,
+                    "labels": c.labels,
+                    "output_schema": c.output_schema,
+                    "samples": c.samples,
+                }
+                for c in found
+            ]
+        }
+
     @app.get("/stats")
     def stats(request: Request) -> dict:
         require_admin(request)
@@ -468,7 +547,7 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         for r in rows:
             r["mode"] = mode_of(r["task"]).value
             r["has_student"] = r["task"] in students
-        return {"tasks": rows, "events": store.events()}
+        return {"tasks": rows, "events": store.events(), "retrain_jobs": store.retrain_jobs(10)}
 
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard(request: Request) -> str:

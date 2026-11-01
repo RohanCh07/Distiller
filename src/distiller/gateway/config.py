@@ -37,6 +37,22 @@ class DemoteSettings(BaseModel):
     min_samples: int = 50  # don't judge on fewer than this
 
 
+class RetrainSettings(BaseModel):
+    # Queue a retrain job when a task is auto-demoted (drift). `distiller retrain-worker`
+    # runs the jobs; each task needs task_file so the worker knows its spec.
+    enabled: bool = False
+    min_new_examples: int = 100  # logged teacher answers needed before retraining
+    reload_seconds: float = 30  # how often gateways check runs/<task>/best.json for a new model
+
+
+class PromoteSettings(BaseModel):
+    # Move shadow -> serve by itself once shadow agreement is high enough.
+    enabled: bool = False
+    min_agreement: float = 0.97
+    window: int = 300
+    min_samples: int = 200
+
+
 class SecuritySettings(BaseModel):
     # Every /v1 request must carry a valid gateway key (dk-...). Keys live in the database
     # (`distiller keys create`); app_keys_env may also hold comma-separated bootstrap keys.
@@ -97,6 +113,8 @@ class TaskSettings(BaseModel):
     # Requests without an X-Distiller-Task header are matched if the system prompt contains this.
     match_system_prompt: str | None = None
     serving: ServingSettings = Field(default_factory=ServingSettings)
+    # The task's task.yaml, needed for automatic retraining.
+    task_file: Path | None = None
 
 
 class GatewayConfig(BaseModel):
@@ -106,6 +124,8 @@ class GatewayConfig(BaseModel):
     audit_rate: float = Field(0.02, ge=0, le=1)
     demote: DemoteSettings = Field(default_factory=DemoteSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    retrain: RetrainSettings = Field(default_factory=RetrainSettings)
+    promote: PromoteSettings = Field(default_factory=PromoteSettings)
     tasks: dict[str, TaskSettings] = Field(default_factory=dict)
 
     def open_store(self):
@@ -137,4 +157,6 @@ class GatewayConfig(BaseModel):
                 t.runs_dir = base / t.runs_dir
             if t.model_dir and str(t.model_dir) != "best" and not t.model_dir.is_absolute():
                 t.model_dir = base / t.model_dir
+            if t.task_file and not t.task_file.is_absolute():
+                t.task_file = base / t.task_file
         return cfg
