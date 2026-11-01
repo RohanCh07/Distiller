@@ -20,10 +20,15 @@ for text in MESSAGES:
     raw = client.chat.completions.with_raw_response.create(
         model="gpt-4o-mini",  # change to the teacher model you use
         messages=[
-            {"role": "system", "content": "Classify the bank customer's message into exactly one intent. Reply with the intent name only."},
+            {
+                "role": "system",
+                "content": "Classify the bank customer's message into exactly one intent. Reply with the intent name only.",
+            },
             {"role": "user", "content": text},
         ],
         extra_headers={"X-Distiller-Task": "banking77"},
     )
     reply = raw.parse()
-    print(f"{raw.headers.get('x-distiller-route', '?'):8}  {reply.choices[0].message.content:35}  <- {text}")
+    print(
+        f"{raw.headers.get('x-distiller-route', '?'):8}  {reply.choices[0].message.content:35}  <- {text}"
+    )

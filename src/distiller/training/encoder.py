@@ -63,6 +63,7 @@ class EncoderStudent(Student):
             fp16=torch.cuda.is_available(),
             logging_steps=50,
             report_to="none",
+            dataloader_pin_memory=torch.cuda.is_available(),
         )
         trainer = Trainer(
             model=self.model,

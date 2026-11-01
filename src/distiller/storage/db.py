@@ -55,7 +55,9 @@ class Store:
         cols = ", ".join(fields)
         marks = ", ".join("?" for _ in fields)
         with self._lock:
-            cur = self._db.execute(f"INSERT INTO calls ({cols}) VALUES ({marks})", list(fields.values()))
+            cur = self._db.execute(
+                f"INSERT INTO calls ({cols}) VALUES ({marks})", list(fields.values())
+            )
             self._db.commit()
             return cur.lastrowid
 

@@ -56,7 +56,9 @@ class DataReport:
             lines += ["", "## Warnings", ""] + [f"- {w}" for w in self.warnings]
         if self.label_counts:
             lines += ["", "## Labels", "", "| Label | Examples |", "|---|---|"]
-            lines += [f"| {k} | {v} |" for k, v in sorted(self.label_counts.items(), key=lambda kv: kv[1])]
+            lines += [
+                f"| {k} | {v} |" for k, v in sorted(self.label_counts.items(), key=lambda kv: kv[1])
+            ]
         for check, items in self.samples.items():
             if items:
                 lines += ["", f"### Samples: {check}", ""] + [f"- {s}" for s in items]
