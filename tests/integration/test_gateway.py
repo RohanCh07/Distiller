@@ -481,7 +481,7 @@ def test_admin_rejects_unknown_mode(gateway):
     assert app.state.store.get_mode("banking77") is None
 
 
-def test_dashboard_renders_numbers(gateway):
+def test_dashboard_page_and_its_data(gateway):
     client, app, _ = gateway("serve", student=FakeStudent(), audit_rate=0)
     for _ in range(3):
         ask(client)
@@ -489,18 +489,18 @@ def test_dashboard_renders_numbers(gateway):
     ask(client)
     wait_background(app)
     html = client.get("/dashboard").text
-    assert html.startswith("<!doctype html>")
-    assert "<td>banking77</td>" in html and "shadow ✓" in html
-    assert "<td>4</td>" in html  # calls
-    assert "75.0%" in html  # served by student
-    assert "shadow (admin api)" in html  # event list
+    assert html.startswith("<!doctype html>") and "/stats/timeseries" in html
+    stats = client.get("/stats").json()
+    t = stats["tasks"][0]
+    assert t["task"] == "banking77" and t["mode"] == "shadow" and t["has_student"]
+    assert t["calls"] == 4 and t["served_by_student"] == 3
+    assert t["teacher_prompt_tokens"] == 20 and t["teacher_completion_tokens"] == 3
+    assert "shadow (admin api)" in stats["events"][0]["detail"]
+    series = client.get("/stats/timeseries?hours=1&bucket=60").json()
+    by_route = {p["route"]: p["calls"] for p in series["points"]}
+    assert series["bucket"] == 60 and by_route == {"student": 3, "teacher": 1}
+    assert all(p["bucket"] % 60 == 0 for p in series["points"])
     assert client.get("/health").json() == {"ok": True, "students": ["banking77"]}
-
-
-def test_dashboard_with_no_traffic(gateway):
-    client, _, _ = gateway()
-    html = client.get("/dashboard").text
-    assert "<li>none</li>" in html
 
 
 def test_exported_logs_are_valid_training_data(gateway, tmp_path):

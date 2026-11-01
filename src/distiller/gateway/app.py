@@ -16,6 +16,7 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -33,6 +34,7 @@ from distiller.spec import TaskSpec, TaskType
 from distiller.tasks.identify import identify
 
 log = logging.getLogger("distiller.gateway")
+DASHBOARD_HTML = (Path(__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
 
 
 class ModeUpdate(BaseModel):
@@ -549,52 +551,23 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
             r["has_student"] = r["task"] in students
         return {"tasks": rows, "events": store.events(), "retrain_jobs": store.retrain_jobs(10)}
 
-    @app.get("/dashboard", response_class=HTMLResponse)
-    def dashboard(request: Request) -> str:
+    @app.get("/stats/timeseries")
+    def timeseries(request: Request, hours: float = 24, bucket: int = 3600) -> dict:
         require_admin(request)
-        return render_dashboard(collect_stats())
+        bucket = max(60, bucket)
+        since = time.time() - hours * 3600
+        return {"bucket": bucket, "points": store.timeseries(bucket, since)}
+
+    @app.get("/dashboard", response_class=HTMLResponse)
+    def dashboard() -> str:
+        # The page holds no data; it calls /stats with the admin key (?key= once, then
+        # kept in sessionStorage), so the shell itself can be public.
+        return DASHBOARD_HTML
 
     app.state.store = store
     app.state.students = students
     app.state.background = background
     return app
-
-
-def _fmt(v: Any, pct: bool = False) -> str:
-    if v is None:
-        return "–"
-    if pct:
-        return f"{v:.1%}"
-    if isinstance(v, float):
-        return f"{v:.0f}"
-    return str(v)
-
-
-def render_dashboard(data: dict) -> str:
-    rows = "".join(
-        f"<tr><td>{t['task']}</td><td>{t['mode']}{' ✓' if t['has_student'] else ''}</td>"
-        f"<td>{t['calls']}</td>"
-        f"<td>{_fmt((t['served_by_student'] or 0) / t['calls'], pct=True)}</td>"
-        f"<td>{_fmt(t['fallbacks'])}</td>"
-        f"<td>{_fmt(t['shadow_agreement'], pct=True)} ({t['shadow_samples']})</td>"
-        f"<td>{_fmt(t['audit_agreement'], pct=True)} ({t['audit_samples']})</td>"
-        f"<td>{_fmt(t['teacher_ms'])} / {_fmt(t['student_ms'])}</td>"
-        f"<td>{_fmt((t['served_by_student'] or 0) * (t['teacher_tokens_per_call'] or 0))}</td></tr>"
-        for t in data["tasks"]
-    )
-    events = "".join(
-        f"<li>{time.strftime('%Y-%m-%d %H:%M', time.localtime(e['ts']))} · {e['task']} · {e['detail']}</li>"
-        for e in data["events"]
-    )
-    return f"""<!doctype html><html><head><meta charset="utf-8"><title>Distiller</title>
-<meta http-equiv="refresh" content="10">
-<style>body{{font-family:system-ui;margin:24px;color:#222}}table{{border-collapse:collapse}}
-td,th{{border-bottom:1px solid #ddd;padding:6px 12px;text-align:left}}th{{background:#f5f5f5}}</style>
-</head><body><h1>Distiller</h1>
-<table><tr><th>Task</th><th>Mode (✓ student loaded)</th><th>Calls</th><th>Served by student</th>
-<th>Fallbacks</th><th>Shadow agreement (n)</th><th>Audit agreement (n)</th>
-<th>Latency ms teacher / student</th><th>Teacher tokens avoided (est.)</th></tr>{rows}</table>
-<h2>Events</h2><ul>{events or "<li>none</li>"}</ul></body></html>"""
 
 
 def app_from_env() -> FastAPI:

@@ -322,6 +322,84 @@ def retrain_worker(
         worker_loop(cfg, store, poll_seconds=poll)
 
 
+# ---------- onboarding ----------
+
+
+@app.command()
+def init(
+    directory: Path = typer.Argument(Path("."), help="Where to write distiller.yaml and tasks/"),
+    task: str = typer.Option(None, help="Task name, e.g. ticket_router"),
+    type_: str = typer.Option(None, "--type", help="classification | extraction | generation"),
+    instruction: str = typer.Option(None, help="The system prompt your app sends today"),
+    labels: str = typer.Option(None, help="Classification labels, comma-separated"),
+    teacher_url: str = typer.Option(None, help="OpenAI-compatible base URL of the big model"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Accept defaults; no questions"),
+    force: bool = typer.Option(False, help="Overwrite an existing distiller.yaml"),
+) -> None:
+    """Set up a project: distiller.yaml, one task, an admin key. Asks a few questions."""
+    from distiller.onboarding import TYPES, write_setup
+    from distiller.security.keys import generate_key, hash_key
+
+    def ask(value, prompt, default):
+        if value is not None or yes:
+            return value if value is not None else default
+        return typer.prompt(prompt, default=default)
+
+    task = ask(task, "Task name", "my_task")
+    type_ = ask(type_, f"Task type ({' / '.join(TYPES)})", "classification")
+    instruction = ask(instruction, "System prompt your app uses for it", "Classify the message.")
+    if type_ == "classification":
+        labels = ask(labels, "Labels, comma-separated (empty: learn from data)", "")
+    teacher_url = ask(teacher_url, "Teacher API base URL", "https://api.openai.com/v1")
+    label_list = [x.strip() for x in (labels or "").split(",") if x.strip()] or None
+    try:
+        paths = write_setup(
+            directory, task, type_, instruction, label_list, teacher_url,
+            "OPENAI_API_KEY", "distiller.db", overwrite=force,
+        )  # fmt: skip
+    except (FileExistsError, ValueError) as e:
+        raise typer.BadParameter(str(e)) from e
+    from distiller.gateway.config import GatewayConfig
+
+    admin = generate_key()
+    GatewayConfig.load(paths[0]).open_store().add_api_key("admin", hash_key(admin), "admin")
+    for p in paths:
+        print(f"wrote {p}")
+    print(
+        f"""
+Admin key (shown once; needed for /dashboard, /stats and /admin):
+  {admin}
+
+Next:
+  export OPENAI_API_KEY=sk-...             # the teacher key
+  distiller doctor -c {paths[0]}
+  distiller gateway -c {paths[0]}          # task starts in observe mode
+  # point your app at http://localhost:8000/v1 and send  X-Distiller-Task: {task}
+  # open http://localhost:8000/dashboard?key=<admin key>
+  # after a few hundred calls:
+  distiller logs export {task} --out {paths[2]} -c {paths[0]}
+  distiller train {paths[1]}
+  distiller task mode {task} shadow -c {paths[0]}"""
+    )
+
+
+@app.command()
+def doctor(
+    config: Path = CONFIG,
+    offline: bool = typer.Option(False, help="Skip the teacher connectivity check"),
+) -> None:
+    """Check a setup: config, database, extras, security, teacher, students."""
+    from distiller.onboarding import doctor as run_doctor
+
+    checks = run_doctor(config, online=not offline)
+    for c in checks:
+        print(c.line())
+    fails = sum(c.status == "fail" for c in checks)
+    warns = sum(c.status == "warn" for c in checks)
+    print(f"\n{fails} problems, {warns} warnings")
+    raise typer.Exit(1 if fails else 0)
+
+
 # ---------- keys ----------
 
 

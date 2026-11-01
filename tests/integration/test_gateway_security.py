@@ -118,8 +118,9 @@ def test_admin_endpoints_open_until_an_admin_key_exists(secure):
     assert client.get("/stats").status_code == 401
     assert client.get("/stats", headers={"X-Distiller-Key": app_key}).status_code == 403
     assert client.get("/stats", headers={"X-Distiller-Key": admin}).status_code == 200
-    assert client.get(f"/dashboard?key={admin}").status_code == 200
-    assert client.get("/dashboard").status_code == 401
+    assert client.get(f"/stats?key={admin}").status_code == 200
+    assert client.get("/stats/timeseries").status_code == 401
+    assert client.get("/dashboard").status_code == 200  # empty shell; its data calls need the key
     r = client.post("/admin/tasks/bank/mode", json={"mode": "serve"})
     assert r.status_code == 401 and app.state.store.get_mode("bank") is None
     r = client.post(

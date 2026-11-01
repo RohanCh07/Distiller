@@ -1,0 +1,46 @@
+site_name: Distiller
+site_description: Turn repetitive LLM tasks into small, cheap models, and prove they are good enough first.
+repo_url: https://github.com/RohanCh07/Distiller
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: {icon: material/brightness-4, name: Light mode}
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: {permalink: true}
+  - pymdownx.superfences
+  - pymdownx.details
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Quickstart: quickstart.md
+      - Working without a GPU: NO_GPU.md
+      - Testing on Kaggle: TESTING.md
+  - Guides:
+      - Gateway: gateway.md
+      - Security: security.md
+      - Deployment: deployment.md
+      - Automation: automation.md
+      - CLI reference: cli.md
+  - Design:
+      - Goal: GOAL.md
+      - Architecture: ARCHITECTURE.md
+      - Decisions: DECISIONS.md
+      - Plan: PLAN.md
