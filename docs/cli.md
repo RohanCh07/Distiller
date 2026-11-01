@@ -2,6 +2,58 @@
 
 Generated from the code by `python scripts/gen_cli_docs.py` (CI checks it is current).
 
+## accounts create
+
+Create a customer account with its pricing terms.
+
+`distiller accounts create NAME [OPTIONS]`
+
+| Name | Kind | Description | Default |
+|---|---|---|---|
+| `NAME` | argument |  |  |
+| `--share` | option | Share of net savings we bill, e.g. 0.3 |  |
+| `--price-in` | option | Teacher USD per 1M input tokens (their current model) |  |
+| `--price-out` | option | Teacher USD per 1M output tokens |  |
+| `--min-monthly` | option | Monthly minimum fee, USD |  |
+| `--student-per-1k` | option | Our cost to serve 1k student calls, USD |  |
+| `--config` / `-c` | option | Gateway config file | `distiller.yaml` |
+
+## accounts list
+
+
+
+`distiller accounts list [OPTIONS]`
+
+| Name | Kind | Description | Default |
+|---|---|---|---|
+| `--config` / `-c` | option | Gateway config file | `distiller.yaml` |
+
+## billing export
+
+Export saved invoices as CSV (one row per task line) for an invoicing system.
+
+`distiller billing export [OPTIONS]`
+
+| Name | Kind | Description | Default |
+|---|---|---|---|
+| `--out` | option | CSV file to write |  |
+| `--account` | option |  |  |
+| `--config` / `-c` | option | Gateway config file | `distiller.yaml` |
+
+## billing invoice
+
+Compute an account's share-of-savings invoice for a month.
+
+`distiller billing invoice ACCOUNT [OPTIONS]`
+
+| Name | Kind | Description | Default |
+|---|---|---|---|
+| `ACCOUNT` | argument |  |  |
+| `--month` | option | YYYY-MM (UTC); default: this month so far |  |
+| `--save` / `--no-save` | flag | Store it (refuses to overwrite unless --replace) |  |
+| `--replace` / `--no-replace` | flag |  |  |
+| `--config` / `-c` | option | Gateway config file | `distiller.yaml` |
+
 ## data check
 
 Validate, dedup and split the data; write a data health report.
@@ -77,6 +129,7 @@ Create a gateway API key. It is printed once; only its hash is stored.
 |---|---|---|---|
 | `NAME` | argument | A label, e.g. the app that will use the key |  |
 | `--role` | option | app (call /v1) or admin (also /admin, /stats, /dashboard) | `app` |
+| `--account` | option | Hosted tier: attach the key to this account |  |
 | `--config` / `-c` | option | Gateway config file | `distiller.yaml` |
 
 ## keys encryption-key

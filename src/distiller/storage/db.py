@@ -55,6 +55,23 @@ CREATE TABLE IF NOT EXISTS api_keys (
     revoked_ts {FLOAT},
     last_used_ts {FLOAT}
 );
+CREATE TABLE IF NOT EXISTS accounts (
+    name TEXT PRIMARY KEY,
+    share REAL NOT NULL,
+    min_monthly_usd REAL NOT NULL DEFAULT 0,
+    teacher_usd_per_1m_in REAL NOT NULL,
+    teacher_usd_per_1m_out REAL NOT NULL,
+    student_usd_per_1k REAL NOT NULL DEFAULT 0,
+    created_ts {FLOAT} NOT NULL
+);
+CREATE TABLE IF NOT EXISTS invoices (
+    account TEXT NOT NULL,
+    period TEXT NOT NULL,
+    amount_usd REAL NOT NULL,
+    detail TEXT NOT NULL,
+    created_ts {FLOAT} NOT NULL,
+    PRIMARY KEY (account, period)
+);
 CREATE TABLE IF NOT EXISTS retrain_jobs (
     id {ID},
     task TEXT NOT NULL,
@@ -68,7 +85,8 @@ CREATE TABLE IF NOT EXISTS retrain_jobs (
 """
 
 # Columns added after the first release: added to existing databases on start-up.
-CALL_COLUMNS_ADDED = {"api_key": "TEXT", "streamed": "INTEGER"}
+CALL_COLUMNS_ADDED = {"api_key": "TEXT", "streamed": "INTEGER", "account": "TEXT"}
+KEY_COLUMNS_ADDED = {"account": "TEXT"}
 
 
 def is_postgres(url: str | Path) -> bool:
@@ -156,10 +174,11 @@ class Store:
         )
         for stmt in filter(str.strip, ddl.split(";")):
             self._run(stmt)
-        have = set(self._columns("calls"))
-        for col, typ in CALL_COLUMNS_ADDED.items():
-            if col not in have:
-                self._run(f"ALTER TABLE calls ADD COLUMN {col} {typ}")
+        for table, added in (("calls", CALL_COLUMNS_ADDED), ("api_keys", KEY_COLUMNS_ADDED)):
+            have = set(self._columns(table))
+            for col, typ in added.items():
+                if col not in have:
+                    self._run(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
 
     def _columns(self, table: str) -> list[str]:
         if self.postgres:
@@ -328,7 +347,8 @@ class Store:
             return 0, 1.0
         return len(rows), sum(r["agree"] for r in rows) / len(rows)
 
-    def stats(self) -> list[dict[str, Any]]:
+    def stats(self, account: str | None = None) -> list[dict[str, Any]]:
+        where, params = ("WHERE account = ?", (account,)) if account is not None else ("", ())
         q = """
         SELECT task,
                COUNT(*) AS calls,
@@ -346,20 +366,26 @@ class Store:
                AVG(prompt_tokens + completion_tokens) AS teacher_tokens_per_call,
                AVG(prompt_tokens) AS teacher_prompt_tokens,
                AVG(completion_tokens) AS teacher_completion_tokens
-        FROM calls GROUP BY task ORDER BY calls DESC
+        FROM calls {where} GROUP BY task ORDER BY calls DESC
         """
-        return self._run(q, fetch="all")
+        return self._run(q.replace("{where}", where), params, fetch="all")
 
-    def timeseries(self, bucket_seconds: int = 3600, since_ts: float = 0) -> list[dict[str, Any]]:
+    def timeseries(
+        self, bucket_seconds: int = 3600, since_ts: float = 0, account: str | None = None
+    ) -> list[dict[str, Any]]:
         """Calls per task, time bucket and route (for dashboard charts)."""
         q = """
         SELECT task, CAST(ts / ? AS INTEGER) * ? AS bucket, route, COUNT(*) AS calls,
                AVG(agree) AS agreement
-        FROM calls WHERE ts >= ? GROUP BY task, bucket, route ORDER BY bucket
+        FROM calls WHERE ts >= ? {acct} GROUP BY task, bucket, route ORDER BY bucket
         """
+        params: list[Any] = [bucket_seconds, bucket_seconds, since_ts]
+        q = q.replace("{acct}", "AND account = ?" if account is not None else "")
+        if account is not None:
+            params.append(account)
         if self.postgres:
             q = q.replace("CAST(ts / ? AS INTEGER) * ?", "FLOOR(ts / ?) * ?")
-        return self._run(q, (bucket_seconds, bucket_seconds, since_ts), fetch="all")
+        return self._run(q, params, fetch="all")
 
     # ---------- export ----------
 
@@ -379,10 +405,12 @@ class Store:
 
     # ---------- API keys ----------
 
-    def add_api_key(self, name: str, key_hash: str, role: str) -> None:
+    def add_api_key(self, name: str, key_hash: str, role: str, account: str | None = None) -> None:
+        if account is not None and self.get_account(account) is None:
+            raise ValueError(f"no account named {account!r}")
         self._run(
-            "INSERT INTO api_keys (name, key_hash, role, created_ts) VALUES (?, ?, ?, ?)",
-            (name, key_hash, role, time.time()),
+            "INSERT INTO api_keys (name, key_hash, role, created_ts, account) VALUES (?, ?, ?, ?, ?)",
+            (name, key_hash, role, time.time(), account),
         )
 
     def find_api_key(self, key_hash: str) -> dict[str, Any] | None:
@@ -406,7 +434,8 @@ class Store:
 
     def list_api_keys(self) -> list[dict[str, Any]]:
         return self._run(
-            "SELECT name, role, created_ts, revoked_ts, last_used_ts FROM api_keys ORDER BY id",
+            "SELECT name, role, account, created_ts, revoked_ts, last_used_ts FROM api_keys "
+            "ORDER BY id",
             fetch="all",
         )
 
@@ -469,6 +498,63 @@ class Store:
     def retrain_jobs(self, limit: int = 20) -> list[dict[str, Any]]:
         return self._run(
             "SELECT * FROM retrain_jobs ORDER BY id DESC LIMIT ?", (limit,), fetch="all"
+        )
+
+    # ---------- accounts (hosted tier) ----------
+
+    def add_account(self, name: str, **terms: Any) -> None:
+        cols = ["name", "created_ts", *terms]
+        self._run(
+            f"INSERT INTO accounts ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})",
+            [name, time.time(), *terms.values()],
+        )
+
+    def get_account(self, name: str) -> dict[str, Any] | None:
+        return self._run("SELECT * FROM accounts WHERE name = ?", (name,), fetch="one")
+
+    def list_accounts(self) -> list[dict[str, Any]]:
+        return self._run("SELECT * FROM accounts ORDER BY name", fetch="all")
+
+    def usage(self, account: str, start_ts: float, end_ts: float) -> list[dict[str, Any]]:
+        """Per task: calls by route and average teacher tokens, for one billing period."""
+        return self._run(
+            """
+            SELECT task,
+                   COUNT(*) AS calls,
+                   SUM(CASE WHEN route = 'student' THEN 1 ELSE 0 END) AS student_calls,
+                   SUM(CASE WHEN route <> 'student' THEN 1 ELSE 0 END) AS teacher_calls,
+                   AVG(prompt_tokens) AS teacher_prompt_tokens,
+                   AVG(completion_tokens) AS teacher_completion_tokens
+            FROM calls WHERE account = ? AND ts >= ? AND ts < ?
+            GROUP BY task ORDER BY task
+            """,
+            (account, start_ts, end_ts),
+            fetch="all",
+        )
+
+    def save_invoice(
+        self, account: str, period: str, amount: float, detail: dict, replace: bool
+    ) -> bool:
+        exists = self._run(
+            "SELECT 1 AS x FROM invoices WHERE account = ? AND period = ?",
+            (account, period),
+            fetch="one",
+        )
+        if exists and not replace:
+            return False
+        if exists:
+            self._run("DELETE FROM invoices WHERE account = ? AND period = ?", (account, period))
+        self._run(
+            "INSERT INTO invoices (account, period, amount_usd, detail, created_ts) VALUES (?, ?, ?, ?, ?)",
+            (account, period, amount, json.dumps(detail), time.time()),
+        )
+        return True
+
+    def invoices(self, account: str | None = None) -> list[dict[str, Any]]:
+        if account is None:
+            return self._run("SELECT * FROM invoices ORDER BY period, account", fetch="all")
+        return self._run(
+            "SELECT * FROM invoices WHERE account = ? ORDER BY period", (account,), fetch="all"
         )
 
 

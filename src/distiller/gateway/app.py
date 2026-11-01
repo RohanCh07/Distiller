@@ -45,6 +45,7 @@ class Caller(BaseModel):
     name: str
     role: str  # app | admin
     via_authorization: bool  # the key came in the Authorization header
+    account: str | None = None  # hosted tier: the customer account the key belongs to
 
 
 def _auth_error(status: int, message: str) -> HTTPException:
@@ -249,20 +250,38 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         if now - last_touch.get(row["name"], 0) > 60:  # at most one write a minute per key
             last_touch[row["name"]] = now
             store.touch_api_key(row["name"])
-        return Caller(name=row["name"], role=row["role"], via_authorization=via_auth)
+        return Caller(
+            name=row["name"],
+            role=row["role"],
+            via_authorization=via_auth,
+            account=row.get("account"),
+        )
 
     def require_app(request: Request) -> Caller | None:
         caller = authenticate(request)
-        if caller is None and security.require_api_key:
+        if caller is None and (security.require_api_key or config.hosted.enabled):
             raise _auth_error(401, "missing Distiller API key (X-Distiller-Key or Bearer dk-...)")
+        if config.hosted.enabled and caller is not None and caller.account is None:
+            raise _auth_error(403, "hosted mode: this key is not attached to an account")
         return caller
 
-    def require_admin(request: Request) -> Caller | None:
+    def require_admin(request: Request, platform: bool = False) -> Caller | None:
+        """Admin key check. platform=True: also refuse account-scoped admins (hosted tier)."""
         caller = authenticate(request, allow_query=True)
-        needed = security.require_api_key or security.env_admin_keys or store.has_admin_key()
+        needed = (
+            security.require_api_key
+            or config.hosted.enabled
+            or security.env_admin_keys
+            or store.has_admin_key()
+        )
         if needed and (caller is None or caller.role != "admin"):
             raise _auth_error(401 if caller is None else 403, "admin key required")
+        if platform and caller is not None and caller.account is not None:
+            raise _auth_error(403, "this action needs a platform admin key")
         return caller
+
+    def scope(caller: Caller | None) -> str | None:
+        return caller.account if caller else None
 
     def auth_headers(request: Request, caller: Caller | None = None) -> dict[str, str]:
         # Never forward a Distiller key upstream: use the configured teacher key instead.
@@ -396,6 +415,7 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         body = await request.json()
         headers = auth_headers(request, caller)
         key_name = caller.name if caller else None
+        account = caller.account if caller else None
         messages = body.get("messages") or []
         stream = bool(body.get("stream"))
         # Audits and comparisons always use a plain (non-streaming) teacher call.
@@ -430,6 +450,7 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
                         mode=mode.value,
                         route="student",
                         api_key=key_name,
+                        account=account,
                         audited=int(audited),
                         input=text,
                         request=messages,
@@ -469,6 +490,7 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
                     mode=mode.value,
                     route=route,
                     api_key=key_name,
+                    account=account,
                     input=text,
                     request=messages,
                     streamed=int(stream),
@@ -498,14 +520,14 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
 
     @app.post("/admin/tasks/{task}/mode")
     async def set_mode(task: str, payload: ModeUpdate, request: Request):
-        require_admin(request)
+        require_admin(request, platform=True)
         mode = payload.mode
         store.set_mode(task, mode.value, reason="admin api")
         return {"task": task, "mode": mode.value}
 
     @app.post("/admin/tasks/{task}/reload")
     async def reload_task(task: str, request: Request):
-        require_admin(request)
+        require_admin(request, platform=True)
         if task not in config.tasks:
             raise HTTPException(404, detail={"error": {"message": f"unknown task {task}"}})
         loaded = await run_in_threadpool(load_one, task, True)
@@ -513,7 +535,7 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
 
     @app.post("/admin/tasks/{task}/retrain")
     async def queue_retrain(task: str, request: Request):
-        require_admin(request)
+        require_admin(request, platform=True)
         job = store.enqueue_retrain(task, "admin api")
         return {"task": task, "queued": job is not None, "job_id": job}
 
@@ -521,7 +543,7 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
     def discover_tasks(request: Request, min_calls: int = 50):
         from distiller.tasks.discover import discover
 
-        require_admin(request)
+        require_admin(request, platform=True)
         found = discover(store, min_calls=min_calls, taken=set(config.tasks))
         return {
             "candidates": [
@@ -541,22 +563,43 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
 
     @app.get("/stats")
     def stats(request: Request) -> dict:
-        require_admin(request)
-        return collect_stats()
+        caller = require_admin(request)
+        data = collect_stats(scope(caller))
+        if scope(caller) is not None:  # account admins see their own traffic only
+            data["events"] = [
+                e for e in data["events"] if e["task"] in {t["task"] for t in data["tasks"]}
+            ]
+            data["retrain_jobs"] = []
+        return data
 
-    def collect_stats() -> dict:
-        rows = store.stats()
+    def collect_stats(account: str | None = None) -> dict:
+        rows = store.stats(account)
         for r in rows:
             r["mode"] = mode_of(r["task"]).value
             r["has_student"] = r["task"] in students
         return {"tasks": rows, "events": store.events(), "retrain_jobs": store.retrain_jobs(10)}
 
+    @app.get("/account/usage")
+    def account_usage(request: Request, period: str | None = None, account: str | None = None):
+        """Hosted tier: this month's (or period's) bill so far. Platform admins pass ?account=."""
+        from distiller.hosted.billing import compute_invoice, current_period
+
+        caller = require_admin(request)
+        target = scope(caller) or account
+        if target is None:
+            raise HTTPException(400, detail={"error": {"message": "pass ?account=<name>"}})
+        try:
+            return compute_invoice(store, target, period or current_period())
+        except ValueError as e:
+            raise HTTPException(404, detail={"error": {"message": str(e)}}) from e
+
     @app.get("/stats/timeseries")
     def timeseries(request: Request, hours: float = 24, bucket: int = 3600) -> dict:
-        require_admin(request)
+        caller = require_admin(request)
         bucket = max(60, bucket)
         since = time.time() - hours * 3600
-        return {"bucket": bucket, "points": store.timeseries(bucket, since)}
+        points = store.timeseries(bucket, since, account=scope(caller))
+        return {"bucket": bucket, "points": points}
 
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard() -> str:

@@ -11,11 +11,15 @@ teacher_app = typer.Typer(help="Use the big model to label inputs or create synt
 logs_app = typer.Typer(help="Work with traffic logged by the gateway.")
 task_app = typer.Typer(help="Change how the gateway handles a task.")
 keys_app = typer.Typer(help="Gateway API keys and the log encryption key.")
+accounts_app = typer.Typer(help="Hosted tier: customer accounts and pricing terms.")
+billing_app = typer.Typer(help="Hosted tier: share-of-savings invoices.")
 app.add_typer(data_app, name="data")
 app.add_typer(teacher_app, name="teacher")
 app.add_typer(logs_app, name="logs")
 app.add_typer(task_app, name="task")
 app.add_typer(keys_app, name="keys")
+app.add_typer(accounts_app, name="accounts")
+app.add_typer(billing_app, name="billing")
 
 TASK = typer.Argument(..., help="Path to task.yaml")
 CONFIG = typer.Option("distiller.yaml", "--config", "-c", help="Gateway config file")
@@ -409,6 +413,7 @@ def keys_create(
     role: str = typer.Option(
         "app", help="app (call /v1) or admin (also /admin, /stats, /dashboard)"
     ),
+    account: str = typer.Option(None, help="Hosted tier: attach the key to this account"),
     config: Path = CONFIG,
 ) -> None:
     """Create a gateway API key. It is printed once; only its hash is stored."""
@@ -418,7 +423,10 @@ def keys_create(
     if role not in ROLES:
         raise typer.BadParameter(f"role must be one of {ROLES}")
     key = generate_key()
-    GatewayConfig.load(config).open_store().add_api_key(name, hash_key(key), role)
+    try:
+        GatewayConfig.load(config).open_store().add_api_key(name, hash_key(key), role, account)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
     print(key)
     print(f"Saved {role} key {name!r}. Store it now: it cannot be shown again.", flush=True)
 
@@ -461,3 +469,80 @@ def keys_rotate_encryption(config: Path = CONFIG) -> None:
 
     n = GatewayConfig.load(config).open_store().rotate_encryption()
     print(f"Re-encrypted {n} rows")
+
+
+# ---------- hosted tier ----------
+
+
+@accounts_app.command("create")
+def accounts_create(
+    name: str = typer.Argument(...),
+    share: float = typer.Option(..., help="Share of net savings we bill, e.g. 0.3"),
+    price_in: float = typer.Option(
+        ..., help="Teacher USD per 1M input tokens (their current model)"
+    ),
+    price_out: float = typer.Option(..., help="Teacher USD per 1M output tokens"),
+    min_monthly: float = typer.Option(0.0, help="Monthly minimum fee, USD"),
+    student_per_1k: float = typer.Option(0.0, help="Our cost to serve 1k student calls, USD"),
+    config: Path = CONFIG,
+) -> None:
+    """Create a customer account with its pricing terms."""
+    from distiller.gateway.config import GatewayConfig
+
+    if not 0 <= share <= 1:
+        raise typer.BadParameter("share must be between 0 and 1")
+    GatewayConfig.load(config).open_store().add_account(
+        name,
+        share=share,
+        min_monthly_usd=min_monthly,
+        teacher_usd_per_1m_in=price_in,
+        teacher_usd_per_1m_out=price_out,
+        student_usd_per_1k=student_per_1k,
+    )
+    print(f"Created account {name}. Give it a key: distiller keys create <name> --account {name}")
+
+
+@accounts_app.command("list")
+def accounts_list(config: Path = CONFIG) -> None:
+    from distiller.gateway.config import GatewayConfig
+
+    print(json.dumps(GatewayConfig.load(config).open_store().list_accounts(), indent=2))
+
+
+@billing_app.command("invoice")
+def billing_invoice(
+    account: str = typer.Argument(...),
+    month: str = typer.Option(None, help="YYYY-MM (UTC); default: this month so far"),
+    save: bool = typer.Option(False, help="Store it (refuses to overwrite unless --replace)"),
+    replace: bool = typer.Option(False),
+    config: Path = CONFIG,
+) -> None:
+    """Compute an account's share-of-savings invoice for a month."""
+    from distiller.gateway.config import GatewayConfig
+    from distiller.hosted.billing import compute_invoice, current_period
+
+    store = GatewayConfig.load(config).open_store()
+    try:
+        inv = compute_invoice(store, account, month or current_period())
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
+    print(json.dumps(inv, indent=2))
+    if save:
+        if not store.save_invoice(account, inv["period"], inv["amount_usd"], inv, replace):
+            raise typer.BadParameter(f"invoice for {account} {inv['period']} exists; use --replace")
+        print(f"Saved invoice {account} {inv['period']}: ${inv['amount_usd']:.2f}")
+
+
+@billing_app.command("export")
+def billing_export(
+    out: Path = typer.Option(..., help="CSV file to write"),
+    account: str = typer.Option(None),
+    config: Path = CONFIG,
+) -> None:
+    """Export saved invoices as CSV (one row per task line) for an invoicing system."""
+    from distiller.gateway.config import GatewayConfig
+    from distiller.hosted.billing import invoice_csv
+
+    rows = GatewayConfig.load(config).open_store().invoices(account)
+    out.write_text(invoice_csv([json.loads(r["detail"]) for r in rows]), encoding="utf-8")
+    print(f"Wrote {len(rows)} invoices to {out}")

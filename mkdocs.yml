@@ -38,6 +38,7 @@ nav:
       - Security: security.md
       - Deployment: deployment.md
       - Automation: automation.md
+      - Hosted tier: hosted.md
       - CLI reference: cli.md
   - Design:
       - Goal: GOAL.md

@@ -12,7 +12,18 @@ Give Distiller a task spec (`task.yaml`) and examples of inputs and outputs. It:
 
 The gateway connects it to live traffic: apps change one URL, the gateway logs calls, runs the student in shadow, then serves it with fallback and drift checks.
 
-## Quick start
+## Quick start (gateway)
+
+```bash
+pip install -e ".[gateway,train,security]"
+distiller init            # writes distiller.yaml + a task, creates an admin key
+distiller doctor          # checks the setup
+distiller gateway         # apps use OPENAI_BASE_URL=http://localhost:8000/v1
+```
+
+Full docs: `mkdocs serve` (or the published site), starting at [docs/quickstart.md](docs/quickstart.md).
+
+## Quick start (engine only)
 
 ```bash
 pip install -e .                       # light: data checks, reports, teacher tools
@@ -37,8 +48,14 @@ distiller gateway                          # apps use OPENAI_BASE_URL=http://loc
 Open http://localhost:8000/dashboard. Switch modes live with `distiller task mode banking77 serve`.
 Export logged traffic for retraining with `distiller logs export banking77 --out data.jsonl`.
 
-Install extras: `[train]` models, `[gateway]` server, `[constrained]` schema-forced JSON
-(pins transformers 4.x), `[quant]` 4-bit training on CUDA.
+Install extras: `[train]` models, `[gateway]` server, `[security]` log encryption, `[postgres]`
+shared database, `[constrained]` schema-forced JSON (pins transformers 4.x), `[quant]` 4-bit
+training on CUDA.
+
+Production features (see the docs): API keys, PII scrubbing and encryption at rest
+([security](docs/security.md)); streaming, Postgres, vLLM students and several gateways
+([deployment](docs/deployment.md)); task discovery and retraining on drift
+([automation](docs/automation.md)); accounts and share-of-savings billing ([hosted](docs/hosted.md)).
 
 ## Tests
 
@@ -56,6 +73,9 @@ pytest -m slow           # CLI end to end with tiny offline models (CPU, ~1-2 mi
 - [docs/DECISIONS.md](docs/DECISIONS.md): every design decision and why
 - [docs/NO_GPU.md](docs/NO_GPU.md): working without owning a GPU
 - [docs/RESULTS.md](docs/RESULTS.md): test suite and the Banking77 run
+- [docs/quickstart.md](docs/quickstart.md), [gateway](docs/gateway.md), [security](docs/security.md),
+  [deployment](docs/deployment.md), [automation](docs/automation.md), [hosted](docs/hosted.md),
+  [CLI reference](docs/cli.md)
 
 ## Layout
 
@@ -73,7 +93,11 @@ Distiller/
 │   ├── teacher.py          big-model client: label + augment
 │   ├── serving/            load a trained student with its routing settings
 │   ├── gateway/            OpenAI-compatible proxy, modes, dashboard
-│   ├── router/ tasks/ storage/   routing policy, task identification, SQLite
+│   ├── router/ tasks/ storage/   routing policy, task identification + discovery, SQLite/Postgres
+│   ├── security/           API keys, PII scrubbing, encryption at rest
+│   ├── automation/         retrain worker
+│   ├── hosted/             accounts metering and billing
+│   ├── onboarding.py       distiller init / doctor
 │   └── cli.py              `distiller ...`
 ├── tests/
 └── deploy/

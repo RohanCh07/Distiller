@@ -52,6 +52,18 @@ Milestones are small on purpose. Each ends with something you can run and see.
 4. Gateway against a real API: observe → shadow → serve on Banking77, watch `/dashboard`.
 5. Later: automatic task discovery for `unassigned:*` traffic, streaming from students, Postgres.
 
+## M7: Production (2026-11-01) · ✅ built
+- Security: hashed API keys, PII scrubbing, encryption at rest.
+- Serving: streaming (student and teacher), Postgres, vLLM students, several gateways.
+- Automation: task discovery, retraining on drift, hot reload, auto-promotion.
+- Onboarding: `distiller init`, `distiller doctor`, new dashboard, docs site.
+- Hosted tier foundations: accounts, isolation, metering, share-of-savings invoices.
+
+## Next
+- Payment provider adapter for invoices; self-service signup.
+- Per-account task namespaces and models in the hosted tier.
+- Real token streaming for long generation tasks (needs a mid-stream fallback policy).
+
 ## Open questions
 - Which teacher API to standardise on for the demo?
 - SQLite only until M3, or Postgres from day one?

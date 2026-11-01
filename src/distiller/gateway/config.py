@@ -53,6 +53,13 @@ class PromoteSettings(BaseModel):
     min_samples: int = 200
 
 
+class HostedSettings(BaseModel):
+    # Cloud tier: every /v1 call needs a key attached to an account (`distiller accounts
+    # create`, `distiller keys create --account`). Calls are tagged with the account;
+    # account admins see only their own stats and bill.
+    enabled: bool = False
+
+
 class SecuritySettings(BaseModel):
     # Every /v1 request must carry a valid gateway key (dk-...). Keys live in the database
     # (`distiller keys create`); app_keys_env may also hold comma-separated bootstrap keys.
@@ -126,6 +133,7 @@ class GatewayConfig(BaseModel):
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     retrain: RetrainSettings = Field(default_factory=RetrainSettings)
     promote: PromoteSettings = Field(default_factory=PromoteSettings)
+    hosted: HostedSettings = Field(default_factory=HostedSettings)
     tasks: dict[str, TaskSettings] = Field(default_factory=dict)
 
     def open_store(self):
