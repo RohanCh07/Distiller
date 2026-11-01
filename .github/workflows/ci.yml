@@ -34,7 +34,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       # pgserver ships Postgres binaries, so store tests also run on a real Postgres.
-      - run: pip install -e ".[gateway,security,postgres]" pytest pgserver openai
+      - run: pip install -e ".[gateway,security,postgres]" pytest openai "pgserver; python_version < '3.13'"
       - run: pytest -m "not slow" -q
 
   e2e:
