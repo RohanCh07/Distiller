@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
@@ -29,8 +29,8 @@ from distiller.data.io import input_from_messages, serialize_output
 from distiller.eval.metrics import is_correct
 from distiller.gateway.config import GatewayConfig, Mode, TaskSettings
 from distiller.router.policy import check_drift, should_audit
+from distiller.security.keys import hash_key, key_from_headers, same
 from distiller.spec import TaskSpec, TaskType
-from distiller.storage.db import Store
 from distiller.tasks.identify import identify
 
 log = logging.getLogger("distiller.gateway")
@@ -38,6 +38,16 @@ log = logging.getLogger("distiller.gateway")
 
 class ModeUpdate(BaseModel):
     mode: Mode
+
+
+class Caller(BaseModel):
+    name: str
+    role: str  # app | admin
+    via_authorization: bool  # the key came in the Authorization header
+
+
+def _auth_error(status: int, message: str) -> HTTPException:
+    return HTTPException(status, detail={"error": {"message": message, "type": "invalid_api_key"}})
 
 
 def _parse_teacher(spec: TaskSpec, content: str) -> Any:
@@ -78,7 +88,9 @@ def _resolve_model_dir(task: str, settings: TaskSettings):
 
 def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
     """transport: optional httpx transport for the upstream API (tests use a mock)."""
-    store = Store(config.database)
+    store = config.open_store()
+    security = config.security
+    last_touch: dict[str, float] = {}
     students: dict[str, Any] = {}
     background: set[asyncio.Task] = set()
     teacher = httpx.AsyncClient(
@@ -108,6 +120,16 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
 
     app = FastAPI(title="Distiller gateway", lifespan=lifespan)
 
+    @app.exception_handler(HTTPException)
+    async def openai_style_errors(_request: Request, exc: HTTPException):
+        # OpenAI SDKs expect {"error": {...}}, not FastAPI's {"detail": ...}.
+        body = (
+            exc.detail
+            if isinstance(exc.detail, dict) and "error" in exc.detail
+            else {"error": {"message": str(exc.detail), "type": "invalid_request_error"}}
+        )
+        return JSONResponse(body, status_code=exc.status_code, headers=exc.headers)
+
     def mode_of(task: str) -> Mode:
         stored = store.get_mode(task)
         if stored:
@@ -115,8 +137,44 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         settings = config.tasks.get(task)
         return settings.mode if settings else Mode.observe
 
-    def auth_headers(request: Request) -> dict[str, str]:
-        auth = request.headers.get("authorization")
+    def authenticate(request: Request, allow_query: bool = False) -> Caller | None:
+        """The caller's gateway key, if any. A key that is sent but unknown is always 401."""
+        key, via_auth = key_from_headers(
+            request.headers, request.query_params if allow_query else None
+        )
+        if not key:
+            return None
+        for k in security.env_admin_keys:
+            if same(k, key):
+                return Caller(name="env:admin", role="admin", via_authorization=via_auth)
+        for k in security.env_app_keys:
+            if same(k, key):
+                return Caller(name="env:app", role="app", via_authorization=via_auth)
+        row = store.find_api_key(hash_key(key))
+        if row is None:
+            raise _auth_error(401, "invalid or revoked Distiller API key")
+        now = time.time()
+        if now - last_touch.get(row["name"], 0) > 60:  # at most one write a minute per key
+            last_touch[row["name"]] = now
+            store.touch_api_key(row["name"])
+        return Caller(name=row["name"], role=row["role"], via_authorization=via_auth)
+
+    def require_app(request: Request) -> Caller | None:
+        caller = authenticate(request)
+        if caller is None and security.require_api_key:
+            raise _auth_error(401, "missing Distiller API key (X-Distiller-Key or Bearer dk-...)")
+        return caller
+
+    def require_admin(request: Request) -> Caller | None:
+        caller = authenticate(request, allow_query=True)
+        needed = security.require_api_key or security.env_admin_keys or store.has_admin_key()
+        if needed and (caller is None or caller.role != "admin"):
+            raise _auth_error(401 if caller is None else 403, "admin key required")
+        return caller
+
+    def auth_headers(request: Request, caller: Caller | None = None) -> dict[str, str]:
+        # Never forward a Distiller key upstream: use the configured teacher key instead.
+        auth = None if caller and caller.via_authorization else request.headers.get("authorization")
         if not auth and config.teacher.api_key:
             auth = f"Bearer {config.teacher.api_key}"
         return {"Authorization": auth} if auth else {}
@@ -194,8 +252,10 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
 
     @app.post("/v1/chat/completions")
     async def chat(request: Request):
+        caller = require_app(request)
         body = await request.json()
-        headers = auth_headers(request)
+        headers = auth_headers(request, caller)
+        key_name = caller.name if caller else None
         messages = body.get("messages") or []
 
         # Streaming is passed straight through (student serving is non-streaming for now).
@@ -213,6 +273,8 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
             task = identify(request.headers, messages, config)
             mode = mode_of(task)
             text = input_from_messages(messages)
+            if store.scrubber:  # the student sees what training data will look like
+                text = store.scrubber.scrub(text)
         except Exception:
             log.exception("routing failed; passing through")
             task, mode, text = "unassigned", Mode.off, ""
@@ -233,6 +295,7 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
                         task=task,
                         mode=mode.value,
                         route="student",
+                        api_key=key_name,
                         audited=int(audited),
                         input=text,
                         request=messages,
@@ -266,6 +329,7 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
                 task=task,
                 mode=mode.value,
                 route=route,
+                api_key=key_name,
                 input=text,
                 request=messages,
                 **fields,
@@ -281,17 +345,23 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
 
     @app.get("/v1/models")
     async def models(request: Request):
-        r = await teacher.get("/models", headers=auth_headers(request))
+        caller = require_app(request)
+        r = await teacher.get("/models", headers=auth_headers(request, caller))
         return Response(r.content, status_code=r.status_code, media_type="application/json")
 
     @app.post("/admin/tasks/{task}/mode")
-    async def set_mode(task: str, payload: ModeUpdate):
+    async def set_mode(task: str, payload: ModeUpdate, request: Request):
+        require_admin(request)
         mode = payload.mode
         store.set_mode(task, mode.value, reason="admin api")
         return {"task": task, "mode": mode.value}
 
     @app.get("/stats")
-    def stats() -> dict:
+    def stats(request: Request) -> dict:
+        require_admin(request)
+        return collect_stats()
+
+    def collect_stats() -> dict:
         rows = store.stats()
         for r in rows:
             r["mode"] = mode_of(r["task"]).value
@@ -299,8 +369,9 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         return {"tasks": rows, "events": store.events()}
 
     @app.get("/dashboard", response_class=HTMLResponse)
-    def dashboard() -> str:
-        return render_dashboard(stats())
+    def dashboard(request: Request) -> str:
+        require_admin(request)
+        return render_dashboard(collect_stats())
 
     app.state.store = store
     app.state.students = students

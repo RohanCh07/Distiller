@@ -10,10 +10,12 @@ data_app = typer.Typer(help="Inspect and prepare task data.")
 teacher_app = typer.Typer(help="Use the big model to label inputs or create synthetic data.")
 logs_app = typer.Typer(help="Work with traffic logged by the gateway.")
 task_app = typer.Typer(help="Change how the gateway handles a task.")
+keys_app = typer.Typer(help="Gateway API keys and the log encryption key.")
 app.add_typer(data_app, name="data")
 app.add_typer(teacher_app, name="teacher")
 app.add_typer(logs_app, name="logs")
 app.add_typer(task_app, name="task")
+app.add_typer(keys_app, name="keys")
 
 TASK = typer.Argument(..., help="Path to task.yaml")
 CONFIG = typer.Option("distiller.yaml", "--config", "-c", help="Gateway config file")
@@ -167,9 +169,8 @@ def logs_export(
 ) -> None:
     """Turn logged teacher answers into a training file for `distiller train`."""
     from distiller.gateway.config import GatewayConfig
-    from distiller.storage.db import Store
 
-    store = Store(GatewayConfig.load(config).database)
+    store = GatewayConfig.load(config).open_store()
     n = 0
     with out.open("w", encoding="utf-8") as f:
         for row in store.export_training_rows(task):
@@ -182,9 +183,8 @@ def logs_export(
 def logs_stats(config: Path = CONFIG) -> None:
     """Per-task traffic, routing and agreement."""
     from distiller.gateway.config import GatewayConfig
-    from distiller.storage.db import Store
 
-    store = Store(GatewayConfig.load(config).database)
+    store = GatewayConfig.load(config).open_store()
     print(json.dumps({"tasks": store.stats(), "events": store.events()}, indent=2, default=str))
 
 
@@ -196,7 +196,69 @@ def task_mode(
 ) -> None:
     """Switch a task's mode (takes effect on the next request; no restart)."""
     from distiller.gateway.config import GatewayConfig, Mode
-    from distiller.storage.db import Store
 
-    Store(GatewayConfig.load(config).database).set_mode(task, Mode(mode).value, reason="cli")
+    GatewayConfig.load(config).open_store().set_mode(task, Mode(mode).value, reason="cli")
     print(f"{task} -> {mode}")
+
+
+# ---------- keys ----------
+
+
+@keys_app.command("create")
+def keys_create(
+    name: str = typer.Argument(..., help="A label, e.g. the app that will use the key"),
+    role: str = typer.Option(
+        "app", help="app (call /v1) or admin (also /admin, /stats, /dashboard)"
+    ),
+    config: Path = CONFIG,
+) -> None:
+    """Create a gateway API key. It is printed once; only its hash is stored."""
+    from distiller.gateway.config import GatewayConfig
+    from distiller.security.keys import ROLES, generate_key, hash_key
+
+    if role not in ROLES:
+        raise typer.BadParameter(f"role must be one of {ROLES}")
+    key = generate_key()
+    GatewayConfig.load(config).open_store().add_api_key(name, hash_key(key), role)
+    print(key)
+    print(f"Saved {role} key {name!r}. Store it now: it cannot be shown again.", flush=True)
+
+
+@keys_app.command("list")
+def keys_list(config: Path = CONFIG) -> None:
+    """List keys (names, roles, last use); never the keys themselves."""
+    from distiller.gateway.config import GatewayConfig
+
+    rows = GatewayConfig.load(config).open_store().list_api_keys()
+    print(json.dumps(rows, indent=2))
+
+
+@keys_app.command("revoke")
+def keys_revoke(name: str = typer.Argument(...), config: Path = CONFIG) -> None:
+    """Revoke a key by name (takes effect on the next request)."""
+    from distiller.gateway.config import GatewayConfig
+
+    if not GatewayConfig.load(config).open_store().revoke_api_key(name):
+        raise typer.BadParameter(f"no active key named {name!r}")
+    print(f"Revoked {name}")
+
+
+@keys_app.command("encryption-key")
+def keys_encryption_key() -> None:
+    """Print a new key for security.encrypt_logs (put it in DISTILLER_ENCRYPTION_KEY)."""
+    from distiller.security.crypto import FieldCipher
+
+    print(FieldCipher.generate_key())
+
+
+@keys_app.command("rotate-encryption")
+def keys_rotate_encryption(config: Path = CONFIG) -> None:
+    """Re-encrypt stored logs with the first key in DISTILLER_ENCRYPTION_KEY.
+
+    To rotate: put the new key first and the old one after it (comma-separated), run this,
+    then remove the old key.
+    """
+    from distiller.gateway.config import GatewayConfig
+
+    n = GatewayConfig.load(config).open_store().rotate_encryption()
+    print(f"Re-encrypted {n} rows")

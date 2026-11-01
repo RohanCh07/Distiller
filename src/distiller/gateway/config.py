@@ -8,6 +8,10 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+def is_url(database: Path | str) -> bool:
+    return "://" in str(database)
+
+
 class Mode(str, Enum):
     off = "off"  # plain passthrough, nothing logged
     observe = "observe"  # teacher answers; call is logged (training data)
@@ -32,6 +36,42 @@ class DemoteSettings(BaseModel):
     min_samples: int = 50  # don't judge on fewer than this
 
 
+class SecuritySettings(BaseModel):
+    # Every /v1 request must carry a valid gateway key (dk-...). Keys live in the database
+    # (`distiller keys create`); app_keys_env may also hold comma-separated bootstrap keys.
+    require_api_key: bool = False
+    app_keys_env: str = "DISTILLER_API_KEYS"
+    # Admin endpoints (/admin, /stats, /dashboard) need an admin key whenever one exists
+    # (in the database or in this env var), and always when require_api_key is on.
+    admin_key_env: str = "DISTILLER_ADMIN_KEY"
+    # Replace emails, phone numbers, card numbers, Aadhaar, PAN, IBAN and IPs with
+    # placeholders before anything is stored. The student sees the same scrubbed input.
+    scrub_pii: bool = False
+    pii_kinds: list[str] = Field(
+        default_factory=lambda: ["email", "card", "aadhaar", "phone", "pan", "iban", "ip"]
+    )
+    # Encrypt stored content with Fernet. The env var holds comma-separated keys (first one
+    # encrypts; all decrypt, for rotation). Create one with `distiller keys encryption-key`.
+    encrypt_logs: bool = False
+    encryption_key_env: str = "DISTILLER_ENCRYPTION_KEY"
+
+    @staticmethod
+    def _env_list(name: str) -> list[str]:
+        return [k.strip() for k in os.environ.get(name, "").split(",") if k.strip()]
+
+    @property
+    def env_app_keys(self) -> list[str]:
+        return self._env_list(self.app_keys_env)
+
+    @property
+    def env_admin_keys(self) -> list[str]:
+        return self._env_list(self.admin_key_env)
+
+    @property
+    def encryption_keys(self) -> str:
+        return os.environ.get(self.encryption_key_env, "")
+
+
 class TaskSettings(BaseModel):
     mode: Mode = Mode.observe
     # A trained model folder, or "best" to use runs/<task>/best.json from `distiller train`.
@@ -43,17 +83,36 @@ class TaskSettings(BaseModel):
 
 class GatewayConfig(BaseModel):
     teacher: TeacherSettings = Field(default_factory=TeacherSettings)
-    database: Path = Path("distiller.db")
+    # SQLite file path, or a postgresql://... URL.
+    database: str | Path = Path("distiller.db")
     audit_rate: float = Field(0.02, ge=0, le=1)
     demote: DemoteSettings = Field(default_factory=DemoteSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
     tasks: dict[str, TaskSettings] = Field(default_factory=dict)
+
+    def open_store(self):
+        """The Store for this config, with PII scrubbing and encryption as configured."""
+        from distiller.security.crypto import FieldCipher
+        from distiller.security.pii import Scrubber
+        from distiller.storage.db import Store
+
+        sec = self.security
+        cipher = None
+        if sec.encrypt_logs:
+            if not sec.encryption_keys:
+                raise ValueError(
+                    f"security.encrypt_logs is on but ${sec.encryption_key_env} is empty"
+                )
+            cipher = FieldCipher.from_env_value(sec.encryption_keys)
+        scrubber = Scrubber(sec.pii_kinds) if sec.scrub_pii else None
+        return Store(self.database, cipher=cipher, scrubber=scrubber)
 
     @classmethod
     def load(cls, path: str | Path) -> "GatewayConfig":
         path = Path(path)
         cfg = cls.model_validate(yaml.safe_load(path.read_text(encoding="utf-8")) or {})
         base = path.resolve().parent
-        if not cfg.database.is_absolute():
+        if not is_url(cfg.database) and not Path(cfg.database).is_absolute():
             cfg.database = base / cfg.database
         for t in cfg.tasks.values():
             if not t.runs_dir.is_absolute():

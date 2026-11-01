@@ -14,7 +14,7 @@ def test_log_and_update_call(tmp_path):
         request=[{"role": "user", "content": "hi"}],
     )
     store.update_call(cid, student_output="x", agree=1)
-    row = store._db.execute("SELECT * FROM calls WHERE id = ?", (cid,)).fetchone()
+    row = store.query("SELECT * FROM calls WHERE id = ?", (cid,))[0]
     assert row["student_output"] == "x" and row["agree"] == 1
     assert json.loads(row["request"]) == [{"role": "user", "content": "hi"}]
     assert row["ts"] > 0

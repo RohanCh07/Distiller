@@ -166,7 +166,7 @@ def ask(client, text="my card has not arrived", tagged=True, **extra):
 
 
 def calls(app):
-    return [dict(r) for r in app.state.store._db.execute("SELECT * FROM calls ORDER BY id")]
+    return app.state.store.query("SELECT * FROM calls ORDER BY id")
 
 
 def wait_background(app, timeout=5.0):
