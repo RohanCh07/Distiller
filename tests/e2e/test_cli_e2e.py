@@ -93,7 +93,12 @@ def test_train_writes_report_model_and_routing(trained_classifier):
 
 def test_predict_command(trained_classifier):
     _, run_dir, _, _ = trained_classifier
-    out = run("predict", run_dir / "models" / "encoder", "my card has not arrived yet", "what exchange rate do you use")
+    out = run(
+        "predict",
+        run_dir / "models" / "encoder",
+        "my card has not arrived yet",
+        "what exchange rate do you use",
+    )
     assert out.count("conf=") == 2 and "route=" in out
 
 
@@ -110,13 +115,18 @@ def test_gateway_serves_trained_student(trained_classifier, tmp_path):
             "database": str(tmp_path / "gw.db"),
             "audit_rate": 0,
             "teacher": {"base_url": "https://upstream.test/v1"},
-            "tasks": {"intents": {"mode": "serve", "model_dir": "best", "runs_dir": str(run_dir.parent)}},
+            "tasks": {
+                "intents": {"mode": "serve", "model_dir": "best", "runs_dir": str(run_dir.parent)}
+            },
         }
     )
     upstream = httpx.MockTransport(
         lambda r: httpx.Response(
             200,
-            json={"choices": [{"message": {"role": "assistant", "content": "top_up"}}], "usage": {}},
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "top_up"}}],
+                "usage": {},
+            },
         )
     )
     with TestClient(create_app(cfg, transport=upstream)) as client:
@@ -138,12 +148,20 @@ def test_sweep_trains_grid_and_keeps_best(tmp_path, tiny_encoder):
         tmp_path,
         classification_rows(30),
         name="sweep",
-        student={"candidates": ["encoder"], "encoder_model": tiny_encoder, "max_length": 32,
-                 "overrides": {"encoder": {"epochs": 1}}},
+        student={
+            "candidates": ["encoder"],
+            "encoder_model": tiny_encoder,
+            "max_length": 32,
+            "overrides": {"encoder": {"epochs": 1}},
+        },
     )
     run("train", task, "--sweep")
     results = json.loads((tmp_path / "runs" / "sweep" / "results.json").read_text())
-    assert [s["params"]["learning_rate"] for s in results["candidates"][0]["sweep"]] == [3e-5, 5e-5, 8e-5]
+    assert [s["params"]["learning_rate"] for s in results["candidates"][0]["sweep"]] == [
+        3e-5,
+        5e-5,
+        8e-5,
+    ]
 
 
 # ---------- transactions example: teacher label -> augment -> train (llm-lora) -> report ----------
@@ -163,7 +181,10 @@ def transactions_task(tmp_path, tiny_llm):
 
 
 def _raw_messages(n: int) -> list[str]:
-    seeds = [json.loads(line)["input"] for line in (ROOT / "examples/transactions/seed.jsonl").read_text().splitlines()]
+    seeds = [
+        json.loads(line)["input"]
+        for line in (ROOT / "examples/transactions/seed.jsonl").read_text().splitlines()
+    ]
     shops = ["Swiggy", "Zomato", "Amazon", "Uber", "Jio", "BigBasket", "Local Kirana"]
     made = [
         f"INR {50 + 13 * i}.00 debited from A/c XX{2000 + i} {'UPI' if i % 2 else 'card'} {shops[i % len(shops)]}"
@@ -185,7 +206,9 @@ def test_transactions_full_cli_flow(transactions_task, teacher_env):
 
     out = run("teacher", "augment", task, "--total", 60, "--out", d / "synthetic.jsonl")
     assert "Added 60 synthetic examples" in out
-    assert all(json.loads(line)["synthetic"] for line in (d / "synthetic.jsonl").read_text().splitlines())
+    assert all(
+        json.loads(line)["synthetic"] for line in (d / "synthetic.jsonl").read_text().splitlines()
+    )
 
     out = run("data", "check", task)
     assert "| **Usable examples** | **144** |" in out
@@ -217,7 +240,9 @@ def test_encoder_on_extraction_fails_cleanly(transactions_task, tiny_encoder):
     rows = [json.loads(line) for line in (d / "seed.jsonl").read_text().splitlines()]
     (d / "labelled.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows * 1))
     # Enough training rows: vary the seeds a little.
-    extra = [{"input": f"{r['input']} (copy {i})", "output": r["output"]} for i in range(4) for r in rows]
+    extra = [
+        {"input": f"{r['input']} (copy {i})", "output": r["output"]} for i in range(4) for r in rows
+    ]
     with (d / "labelled.jsonl").open("a") as f:
         f.write("".join(json.dumps(r) + "\n" for r in extra))
     out = run("train", d / "task.yaml", "--candidates", "encoder")

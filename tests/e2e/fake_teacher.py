@@ -92,7 +92,11 @@ class _Handler(BaseHTTPRequestHandler):
                 "object": "chat.completion",
                 "model": "fake-teacher",
                 "choices": [
-                    {"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": content},
+                        "finish_reason": "stop",
+                    }
                 ],
                 "usage": {"prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60},
             }
