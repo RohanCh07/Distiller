@@ -1,0 +1,22 @@
+# Copy to distiller.yaml, then: distiller gateway
+# Apps point OPENAI_BASE_URL at http://localhost:8000/v1 and (optionally) send
+# the header  X-Distiller-Task: <task name>.
+teacher:
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY      # only used if the app sends no Authorization header
+
+database: distiller.db
+audit_rate: 0.02                   # share of student answers re-checked by the teacher
+demote:
+  min_agreement: 0.92              # below this, the task drops back to shadow mode
+  window: 200
+  min_samples: 50
+
+tasks:
+  banking77:
+    mode: shadow                   # off | observe | shadow | serve
+    model_dir: best                # runs/banking77/best.json from `distiller train`
+    runs_dir: runs
+    match_system_prompt: "Classify the bank customer's message"
+  transactions:
+    mode: observe                  # just collect training data for now

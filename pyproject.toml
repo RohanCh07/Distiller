@@ -1,0 +1,46 @@
+[project]
+name = "distiller"
+version = "0.2.0"
+description = "Turn repetitive LLM tasks into small, cheap, calibrated models"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "jsonschema>=4.20",
+    "numpy>=1.26",
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+# Model training and inference (needed on Kaggle/Colab; optional on a laptop).
+train = [
+    "accelerate>=1.0",
+    "peft>=0.13",
+    "torch>=2.3",
+    "transformers>=4.56",
+]
+# 4-bit QLoRA on CUDA machines only.
+quant = ["bitsandbytes>=0.43"]
+# Schema-constrained JSON decoding for extraction tasks. lm-format-enforcer does not
+# support transformers 5 yet, so this extra pins transformers 4.x.
+constrained = ["lm-format-enforcer>=0.10", "transformers>=4.56,<5"]
+# Live connection (M6).
+gateway = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+distiller = "distiller.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100

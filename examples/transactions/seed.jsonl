@@ -1,0 +1,24 @@
+{"input": "Rs.450.00 debited from A/c XX1234 on 12-10-26 to VPA swiggy@ybl (UPI Ref 628811234567). Not you? Call 1800...", "output": {"direction": "debit", "amount": 450.0, "merchant": "Swiggy", "category": "food", "method": "upi"}}
+{"input": "UPI/DR/628812345678/ZOMATO/YESB/zomato@yes/Order", "output": {"direction": "debit", "amount": null, "merchant": "Zomato", "category": "food", "method": "upi"}}
+{"input": "Aapke khate XX5678 se Rs 1,299 ka bhugtan Amazon ko card se kiya gaya.", "output": {"direction": "debit", "amount": 1299.0, "merchant": "Amazon", "category": "shopping", "method": "card"}}
+{"input": "INR 52,000.00 credited to your A/c XX9012 on 01-10-2026 by NEFT from ACME TECHNOLOGIES PVT LTD - SALARY OCT", "output": {"direction": "credit", "amount": 52000.0, "merchant": "ACME Technologies Pvt Ltd", "category": "salary", "method": "neft_imps"}}
+{"input": "bhai 2000 bheje the paytm pe rahul ko, ref 6281", "output": {"direction": "debit", "amount": 2000.0, "merchant": "Rahul", "category": "transfer", "method": "upi"}}
+{"input": "Your a/c XX3344 is debited by Rs.199 for Jio Prepaid Recharge via UPI.", "output": {"direction": "debit", "amount": 199.0, "merchant": "Jio", "category": "recharge", "method": "upi"}}
+{"input": "Rs 3,500 withdrawn at ATM SBIN0001234 MG Road on 05/10. Avl bal Rs 12,040", "output": {"direction": "debit", "amount": 3500.0, "merchant": null, "category": "cash", "method": "atm"}}
+{"input": "Txn of INR 2,150.75 on HDFC Bank Card XX7788 at INDIAN OIL PETROL PUMP on 2026-10-08", "output": {"direction": "debit", "amount": 2150.75, "merchant": "Indian Oil", "category": "fuel", "method": "card"}}
+{"input": "BESCOM bill payment of Rs.1,842 successful through netbanking. Ref BBPS123456", "output": {"direction": "debit", "amount": 1842.0, "merchant": "BESCOM", "category": "bills", "method": "netbanking"}}
+{"input": "Rent oct ka 18000 transfer kar diya landlord sharma ji ko IMPS se", "output": {"direction": "debit", "amount": 18000.0, "merchant": "Sharma ji", "category": "rent", "method": "neft_imps"}}
+{"input": "UPI/CR/628899887766/PRIYA S/OKAXIS/split dinner", "output": {"direction": "credit", "amount": null, "merchant": "Priya S", "category": "transfer", "method": "upi"}}
+{"input": "Rs 649 debited for Netflix subscription on card XX1122", "output": {"direction": "debit", "amount": 649.0, "merchant": "Netflix", "category": "entertainment", "method": "card"}}
+{"input": "BigBasket order ka 2,340 rs UPI se kat gaya", "output": {"direction": "debit", "amount": 2340.0, "merchant": "BigBasket", "category": "groceries", "method": "upi"}}
+{"input": "EMI of Rs 7,850 for Loan A/c XX4455 debited on 05-10-2026", "output": {"direction": "debit", "amount": 7850.0, "merchant": null, "category": "emi", "method": "other"}}
+{"input": "Apollo Pharmacy: Rs.560 paid via PhonePe UPI", "output": {"direction": "debit", "amount": 560.0, "merchant": "Apollo Pharmacy", "category": "health", "method": "upi"}}
+{"input": "IRCTC ticket booking Rs 1,245.60 debited from card XX9090", "output": {"direction": "debit", "amount": 1245.6, "merchant": "IRCTC", "category": "travel", "method": "card"}}
+{"input": "Uber trip ke 312 rupaye UPI se pay hue", "output": {"direction": "debit", "amount": 312.0, "merchant": "Uber", "category": "travel", "method": "upi"}}
+{"input": "Rs. 25,000 credited to a/c XX6677 via IMPS from VIKRAM MEHTA", "output": {"direction": "credit", "amount": 25000.0, "merchant": "Vikram Mehta", "category": "transfer", "method": "neft_imps"}}
+{"input": "School fees Rs 15,500 paid to DPS through netbanking", "output": {"direction": "debit", "amount": 15500.0, "merchant": "DPS", "category": "education", "method": "netbanking"}}
+{"input": "DMart mein 1,876 ka payment card se hua", "output": {"direction": "debit", "amount": 1876.0, "merchant": "DMart", "category": "groceries", "method": "card"}}
+{"input": "Refund of Rs 899 from Myntra credited to your card XX3030", "output": {"direction": "credit", "amount": 899.0, "merchant": "Myntra", "category": "shopping", "method": "card"}}
+{"input": "Airtel postpaid bill Rs 599 auto-debited via UPI mandate", "output": {"direction": "debit", "amount": 599.0, "merchant": "Airtel", "category": "bills", "method": "upi"}}
+{"input": "BookMyShow 2 tickets 540 rs gpay se", "output": {"direction": "debit", "amount": 540.0, "merchant": "BookMyShow", "category": "entertainment", "method": "upi"}}
+{"input": "Cashback of Rs 50 credited by PhonePe", "output": {"direction": "credit", "amount": 50.0, "merchant": "PhonePe", "category": "other", "method": "upi"}}

@@ -1,0 +1,39 @@
+# Indian bank SMS / UPI narrations (English, Hindi, Hinglish) -> structured JSON.
+# seed.jsonl has a few hand-written examples. Grow it with the teacher:
+#   distiller teacher augment examples/transactions/task.yaml --total 1500 --out synthetic.jsonl
+# Or label your own raw messages:
+#   distiller teacher label examples/transactions/task.yaml --inputs raw.txt --out data.jsonl
+name: transactions
+type: extraction
+instruction: >
+  Extract the transaction details from this Indian bank SMS or UPI narration.
+  Use null when a field is not present.
+output_schema:
+  type: object
+  additionalProperties: false
+  required: [direction, amount, merchant, category, method]
+  properties:
+    direction: {enum: [debit, credit]}
+    amount: {type: [number, "null"]}
+    merchant: {type: [string, "null"]}
+    category:
+      enum: [food, groceries, shopping, travel, fuel, bills, recharge, rent, salary,
+             transfer, entertainment, health, education, emi, cash, other]
+    method: {enum: [upi, card, netbanking, atm, neft_imps, other]}
+
+data:
+  path: seed.jsonl
+  synthetic_path: synthetic.jsonl
+  val_fraction: 0.15
+  test_fraction: 0.2
+
+student:
+  llm_model: Qwen/Qwen2.5-0.5B-Instruct
+  max_length: 256
+  overrides:
+    llm-lora: {epochs: 3, constrained_decoding: true}
+
+target:
+  min_accuracy: 0.9
+
+output_dir: ../../runs

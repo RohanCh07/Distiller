@@ -1,0 +1,5 @@
+# Local dev: gateway + Postgres + Ollama (student on CPU). Filled in at M1/M3.
+services:
+  ollama:
+    image: ollama/ollama
+    ports: ["11434:11434"]

@@ -1,0 +1,30 @@
+# Banking77: map a bank customer's message to one of 77 intents.
+# Run `python examples/banking77/prepare.py` first to download data.jsonl.
+name: banking77
+type: classification
+instruction: >
+  Classify the bank customer's message into exactly one intent.
+  Reply with the intent name only.
+# labels: omitted, so they are taken from the data (all 77 appear).
+
+data:
+  path: data.jsonl
+  input_field: input
+  output_field: output
+  val_fraction: 0.1
+  test_fraction: 0.15
+  seed: 42
+
+student:
+  candidates: [encoder, llm-lora]
+  encoder_model: answerdotai/ModernBERT-base
+  llm_model: Qwen/Qwen2.5-0.5B-Instruct
+  max_length: 128
+  overrides:
+    encoder: {epochs: 4}
+    llm-lora: {epochs: 2, batch_size: 16, grad_accum: 1}
+
+target:
+  min_accuracy: 0.95
+
+output_dir: ../../runs
