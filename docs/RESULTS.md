@@ -85,7 +85,8 @@ input and 5 output tokens per call (characters / 4). The student takes 93.1% of 
 | 2.50 / 10.00 (large model; example) | $1,233 | **$1,148** |
 
 Prices are examples; pass your own with `--price-in/--price-out`. The savings do not subtract the
-cost of running the student (one CPU core handles roughly 20–35 requests/s at these latencies).
+cost of running the student: here one gateway process on 4 vCPU answered about 18 requests/s,
+one at a time (~55 ms each); throughput with concurrent requests was not measured.
 
 **Reproduce:**
 
