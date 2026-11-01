@@ -33,7 +33,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[gateway,security]" pytest
+      # pgserver ships Postgres binaries, so store tests also run on a real Postgres.
+      - run: pip install -e ".[gateway,security,postgres]" pytest pgserver openai
       - run: pytest -m "not slow" -q
 
   e2e:
@@ -49,3 +50,11 @@ jobs:
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -e ".[gateway,train]" pytest
       - run: pytest -m slow -q
+
+  docker:
+    # Builds the gateway image (not pushed) so deploy/Dockerfile stays working.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/Dockerfile -t distiller-gateway:ci .
+      - run: docker run --rm distiller-gateway:ci distiller version

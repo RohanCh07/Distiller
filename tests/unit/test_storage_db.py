@@ -4,8 +4,8 @@ import threading
 from distiller.storage.db import Store
 
 
-def test_log_and_update_call(tmp_path):
-    store = Store(tmp_path / "sub" / "d.db")
+def test_log_and_update_call(db_url):
+    store = Store(db_url)
     cid = store.log_call(
         task="t",
         mode="observe",
@@ -20,8 +20,8 @@ def test_log_and_update_call(tmp_path):
     assert row["ts"] > 0
 
 
-def test_modes_and_events(tmp_path):
-    store = Store(tmp_path / "d.db")
+def test_modes_and_events(db_url):
+    store = Store(db_url)
     assert store.get_mode("t") is None
     store.set_mode("t", "shadow", reason="cli")
     store.set_mode("t", "serve")
@@ -32,13 +32,13 @@ def test_modes_and_events(tmp_path):
     assert len(store.events(limit=1)) == 1
 
 
-def test_mode_persists_across_instances(tmp_path):
-    Store(tmp_path / "d.db").set_mode("t", "serve")
-    assert Store(tmp_path / "d.db").get_mode("t") == "serve"
+def test_mode_persists_across_instances(db_url):
+    Store(db_url).set_mode("t", "serve")
+    assert Store(db_url).get_mode("t") == "serve"
 
 
-def test_recent_agreement_window_and_mode_reset(tmp_path):
-    store = Store(tmp_path / "d.db")
+def test_recent_agreement_window_and_mode_reset(db_url):
+    store = Store(db_url)
     assert store.recent_agreement("t", 10) == (0, 1.0)
     for i in range(10):
         store.log_call(
@@ -57,8 +57,8 @@ def test_recent_agreement_window_and_mode_reset(tmp_path):
     assert store.recent_agreement("t", 100) == (0, 1.0)
 
 
-def test_stats(tmp_path):
-    store = Store(tmp_path / "d.db")
+def test_stats(db_url):
+    store = Store(db_url)
     common = {"task": "a", "prompt_tokens": 10, "completion_tokens": 5}
     store.log_call(mode="shadow", route="teacher", agree=1, teacher_ms=100, **common)
     store.log_call(mode="shadow", route="teacher", agree=0, teacher_ms=300, **common)
@@ -77,8 +77,8 @@ def test_stats(tmp_path):
     assert by_task["b"]["shadow_agreement"] is None
 
 
-def test_export_training_rows(tmp_path):
-    store = Store(tmp_path / "d.db")
+def test_export_training_rows(db_url):
+    store = Store(db_url)
     req = [
         {"role": "system", "content": "s"},
         {"role": "user", "content": "q1"},
@@ -103,8 +103,8 @@ def test_export_training_rows(tmp_path):
     ]
 
 
-def test_concurrent_writes(tmp_path):
-    store = Store(tmp_path / "d.db")
+def test_concurrent_writes(db_url):
+    store = Store(db_url)
 
     def work():
         for _ in range(50):

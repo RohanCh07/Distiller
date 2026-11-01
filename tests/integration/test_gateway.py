@@ -368,13 +368,94 @@ def test_untagged_requests_identified_by_system_prompt_or_hash(gateway):
     assert tasks[1].startswith("unassigned:")
 
 
-def test_streaming_is_passed_through(gateway):
-    client, app, up = gateway("serve", student=FakeStudent())
-    r = ask(client, stream=True)
-    assert r.status_code == 200
+def _sse_events(text: str) -> list:
+    out = []
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            payload = line[6:]
+            out.append(payload if payload == "[DONE]" else json.loads(payload))
+    return out
+
+
+def _streamed_text(events) -> str:
+    return "".join(
+        (c["delta"].get("content") or "") for e in events if e != "[DONE]" for c in e["choices"]
+    )
+
+
+def test_stream_served_by_confident_student(gateway):
+    client, app, up = gateway(
+        "serve", student=FakeStudent(output="card_arrival_and_more_text"), audit_rate=0
+    )
+    r = ask(client, stream=True, stream_options={"include_usage": True})
+    assert r.status_code == 200 and r.headers["x-distiller-route"] == "student"
     assert r.headers["content-type"].startswith("text/event-stream")
+    events = _sse_events(r.text)
+    assert events[-1] == "[DONE]"
+    assert events[0]["choices"][0]["delta"]["role"] == "assistant"
+    assert all(e["object"] == "chat.completion.chunk" for e in events[:-1])
+    assert _streamed_text(events) == "card_arrival_and_more_text"
+    finish = [e for e in events[:-1] if e["choices"] and e["choices"][0]["finish_reason"]]
+    assert finish[0]["choices"][0]["finish_reason"] == "stop"
+    assert events[-2]["usage"]["total_tokens"] == 0 and events[-2]["choices"] == []
+    assert up.chat_calls() == []
+    assert calls(app)[0]["route"] == "student"
+
+
+def test_stream_fallback_relays_teacher_and_logs_it(gateway):
+    client, app, up = gateway("serve", student=FakeStudent(output="top_up", confidence=0.2))
+    r = ask(client, stream=True)
+    assert r.headers["x-distiller-route"] == "fallback"
+    assert _streamed_text(_sse_events(r.text)) == "card_arrival"
+    assert up.chat_calls()[0]["body"]["stream"] is True  # the teacher streamed too
+    [row] = calls(app)
+    assert row["route"] == "fallback" and row["streamed"] == 1
+    assert row["teacher_output"] == "card_arrival" and row["student_output"] == "top_up"
+
+
+def test_stream_shadow_compares_in_background(gateway):
+    client, app, _ = gateway("shadow", student=FakeStudent(output="card_arrival"))
+    r = ask(client, stream=True)
+    assert r.headers["x-distiller-route"] == "teacher"
+    wait_background(app)
+    [row] = calls(app)
+    assert row["teacher_output"] == "card_arrival" and row["agree"] == 1
+
+
+def test_stream_off_mode_is_plain_passthrough(gateway):
+    client, app, _ = gateway("off")
+    r = ask(client, stream=True)
     assert "card_" in r.text and "[DONE]" in r.text
-    assert calls(app) == []  # streaming bypasses routing for now
+    assert calls(app) == []
+
+
+def test_stream_audit_uses_non_streaming_call(gateway):
+    client, app, up = gateway("serve", student=FakeStudent(), audit_rate=1)
+    ask(client, stream=True, stream_options={"include_usage": True})
+    wait_background(app)
+    body = up.chat_calls()[0]["body"]
+    assert "stream" not in body and "stream_options" not in body
+    assert calls(app)[0]["agree"] == 1
+
+
+def test_openai_sdk_compatibility(gateway):
+    """The official OpenAI SDK talks to the gateway unchanged, streaming or not."""
+    openai = pytest.importorskip("openai")
+    client, app, _ = gateway("serve", student=FakeStudent(confidence=0.95), audit_rate=0)
+    sdk = openai.OpenAI(base_url="http://testserver/v1", api_key="sk-x", http_client=client)
+    msgs = [{"role": "user", "content": "my card has not arrived"}]
+    extra = {"extra_headers": {"X-Distiller-Task": "banking77"}}
+    reply = sdk.chat.completions.create(model="big-model", messages=msgs, **extra)
+    assert reply.choices[0].message.content == "card_arrival"
+    chunks = list(
+        sdk.chat.completions.create(model="big-model", messages=msgs, stream=True, **extra)
+    )
+    assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "card_arrival"
+    app.state.students["banking77"].confidence = 0.1  # now the teacher answers, streamed
+    chunks = list(
+        sdk.chat.completions.create(model="big-model", messages=msgs, stream=True, **extra)
+    )
+    assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "card_arrival"
 
 
 def test_models_endpoint_proxied(gateway):

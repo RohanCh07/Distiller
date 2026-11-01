@@ -23,7 +23,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
-from starlette.background import BackgroundTask
 
 from distiller.data.io import input_from_messages, serialize_output
 from distiller.eval.metrics import is_correct
@@ -77,6 +76,67 @@ def _student_response(task: str, output: Any, confidence: float) -> dict:
     }
 
 
+def _student_sse(task: str, output: Any, confidence: float, body: dict):
+    """A student answer as an OpenAI chat.completion.chunk stream.
+
+    The whole answer is computed first (we must know the confidence before we commit to
+    the student), then sent in small pieces so streaming clients work unchanged.
+    """
+    cid = f"distiller-{uuid.uuid4().hex[:24]}"
+    created = int(time.time())
+    text = serialize_output(output)
+
+    def chunk(delta: dict, finish: str | None = None, **extra) -> str:
+        data = {
+            "id": cid,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": f"distiller/{task}",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+            **extra,
+        }
+        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    async def gen():
+        yield chunk({"role": "assistant", "content": ""})
+        for i in range(0, len(text), 16):
+            yield chunk({"content": text[i : i + 16]})
+        extra = {"distiller": {"route": "student", "confidence": round(confidence, 4)}}
+        yield chunk({}, "stop", **extra)
+        if (body.get("stream_options") or {}).get("include_usage"):
+            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            yield f"data: {json.dumps({'id': cid, 'object': 'chat.completion.chunk', 'created': created, 'model': f'distiller/{task}', 'choices': [], 'usage': usage})}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return gen()
+
+
+def _parse_sse(raw: bytes) -> dict[str, Any]:
+    """Rebuild the teacher's answer (and usage, if sent) from a captured SSE stream."""
+    parts: list[str] = []
+    out: dict[str, Any] = {}
+    for line in raw.decode("utf-8", errors="replace").splitlines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]" or not payload:
+            continue
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            continue
+        for choice in data.get("choices") or []:
+            if choice.get("index", 0) == 0:
+                parts.append((choice.get("delta") or {}).get("content") or "")
+        if data.get("usage"):
+            out["prompt_tokens"] = data["usage"].get("prompt_tokens")
+            out["completion_tokens"] = data["usage"].get("completion_tokens")
+        if data.get("model"):
+            out["model"] = data["model"]
+    out["teacher_output"] = "".join(parts) if parts else None
+    return out
+
+
 def _resolve_model_dir(task: str, settings: TaskSettings):
     if settings.model_dir is None:
         return None
@@ -100,14 +160,14 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
     )
 
     def load_students() -> None:
-        from distiller.serving.registry import LoadedStudent
+        from distiller.serving.registry import load_student
 
         for name, settings in config.tasks.items():
             model_dir = _resolve_model_dir(name, settings)
             if not model_dir:
                 continue
             try:
-                students[name] = LoadedStudent(model_dir)
+                students[name] = load_student(model_dir, settings.serving)
                 log.info("loaded student for %s from %s", name, model_dir)
             except Exception:  # a broken model must not stop the gateway
                 log.exception("could not load student for %s; task stays teacher-only", name)
@@ -246,6 +306,41 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         except Exception:
             log.exception("audit failed for %s", task)
 
+    async def relay_stream(body: dict, headers: dict, on_done, route: str = "teacher"):
+        """Relay the teacher's SSE stream unchanged; capture it to log when it finishes."""
+        start = time.perf_counter()
+        try:
+            req = teacher.build_request("POST", "/chat/completions", json=body, headers=headers)
+            upstream = await teacher.send(req, stream=True)
+        except httpx.HTTPError as e:
+            log.error("teacher unreachable: %s", e)
+            return JSONResponse(
+                {"error": {"message": f"teacher unreachable: {e}", "type": "bad_gateway"}},
+                status_code=502,
+            )
+
+        async def body_iter():
+            captured = bytearray()
+            try:
+                async for chunk in upstream.aiter_raw():
+                    captured += chunk
+                    yield chunk
+            finally:
+                await upstream.aclose()
+            if on_done is not None:
+                ms = 1000 * (time.perf_counter() - start)
+                if upstream.status_code == 200:
+                    on_done(200, {"teacher_ms": ms, **_parse_sse(bytes(captured))})
+                else:
+                    on_done(upstream.status_code, {"teacher_ms": ms})
+
+        return StreamingResponse(
+            body_iter(),
+            status_code=upstream.status_code,
+            media_type=upstream.headers.get("content-type"),
+            headers={"x-distiller-route": route},
+        )
+
     @app.get("/health")
     def health() -> dict:
         return {"ok": True, "students": sorted(students)}
@@ -257,17 +352,9 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         headers = auth_headers(request, caller)
         key_name = caller.name if caller else None
         messages = body.get("messages") or []
-
-        # Streaming is passed straight through (student serving is non-streaming for now).
-        if body.get("stream"):
-            req = teacher.build_request("POST", "/chat/completions", json=body, headers=headers)
-            upstream = await teacher.send(req, stream=True)
-            return StreamingResponse(
-                upstream.aiter_raw(),
-                status_code=upstream.status_code,
-                media_type=upstream.headers.get("content-type"),
-                background=BackgroundTask(upstream.aclose),
-            )
+        stream = bool(body.get("stream"))
+        # Audits and comparisons always use a plain (non-streaming) teacher call.
+        plain_body = {k: v for k, v in body.items() if k not in ("stream", "stream_options")}
 
         try:
             task = identify(request.headers, messages, config)
@@ -280,6 +367,8 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
             task, mode, text = "unassigned", Mode.off, ""
 
         if mode == Mode.off:
+            if stream:
+                return await relay_stream(body, headers, on_done=None)
             status, data, _ = await call_teacher(body, headers)
             return JSONResponse(data, status_code=status)
 
@@ -304,7 +393,13 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
                         student_ms=ms,
                     )
                     if audited:
-                        spawn(audit(task, call_id, body, headers, ans.output))
+                        spawn(audit(task, call_id, plain_body, headers, ans.output))
+                    if stream:
+                        return StreamingResponse(
+                            _student_sse(task, ans.output, ans.confidence, body),
+                            media_type="text/event-stream",
+                            headers={"x-distiller-route": "student"},
+                        )
                     resp = JSONResponse(_student_response(task, ans.output, ans.confidence))
                     resp.headers["x-distiller-route"] = "student"
                     return resp
@@ -322,23 +417,30 @@ def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None
         else:
             route, student_fields = "teacher", {}
 
+        def log_teacher_call(status: int, fields: dict[str, Any]) -> None:
+            try:
+                call_id = store.log_call(
+                    task=task,
+                    mode=mode.value,
+                    route=route,
+                    api_key=key_name,
+                    input=text,
+                    request=messages,
+                    streamed=int(stream),
+                    **fields,
+                    **student_fields,
+                )
+                if mode == Mode.shadow and has_student and status == 200:
+                    spawn(shadow_compare(task, call_id, text, fields.get("teacher_output")))
+            except Exception:
+                log.exception("logging failed for %s", task)
+
+        if stream:
+            return await relay_stream(body, headers, on_done=log_teacher_call, route=route)
+
         status, data, ms = await call_teacher(body, headers)
         fields = teacher_fields(status, data, ms)
-        try:
-            call_id = store.log_call(
-                task=task,
-                mode=mode.value,
-                route=route,
-                api_key=key_name,
-                input=text,
-                request=messages,
-                **fields,
-                **student_fields,
-            )
-            if mode == Mode.shadow and has_student and status == 200:
-                spawn(shadow_compare(task, call_id, text, fields.get("teacher_output")))
-        except Exception:
-            log.exception("logging failed for %s", task)
+        log_teacher_call(status, fields)
         resp = JSONResponse(data, status_code=status)
         resp.headers["x-distiller-route"] = route
         return resp
@@ -414,3 +516,10 @@ td,th{{border-bottom:1px solid #ddd;padding:6px 12px;text-align:left}}th{{backgr
 <th>Fallbacks</th><th>Shadow agreement (n)</th><th>Audit agreement (n)</th>
 <th>Latency ms teacher / student</th><th>Teacher tokens avoided (est.)</th></tr>{rows}</table>
 <h2>Events</h2><ul>{events or "<li>none</li>"}</ul></body></html>"""
+
+
+def app_from_env() -> FastAPI:
+    """App factory for multi-worker uvicorn: reads the config path from DISTILLER_CONFIG."""
+    import os
+
+    return create_app(GatewayConfig.load(os.environ.get("DISTILLER_CONFIG", "distiller.yaml")))

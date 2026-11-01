@@ -3,9 +3,10 @@
 import os
 from enum import Enum
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def is_url(database: Path | str) -> bool:
@@ -72,6 +73,22 @@ class SecuritySettings(BaseModel):
         return os.environ.get(self.encryption_key_env, "")
 
 
+class ServingSettings(BaseModel):
+    # local: load the model into the gateway. vllm: call a vLLM server (llm-lora students,
+    # started with `distiller serve-vllm`); the gateway keeps only calibration + threshold.
+    backend: Literal["local", "vllm"] = "local"
+    url: str = "http://localhost:8001/v1"
+    model: str | None = None  # served model name; defaults to the task name
+    api_key_env: str | None = None
+    timeout_seconds: float = 30
+
+    @model_validator(mode="after")
+    def _check(self) -> "ServingSettings":
+        if self.backend == "vllm" and not self.url:
+            raise ValueError("serving.url is required for the vllm backend")
+        return self
+
+
 class TaskSettings(BaseModel):
     mode: Mode = Mode.observe
     # A trained model folder, or "best" to use runs/<task>/best.json from `distiller train`.
@@ -79,6 +96,7 @@ class TaskSettings(BaseModel):
     runs_dir: Path = Path("runs")
     # Requests without an X-Distiller-Task header are matched if the system prompt contains this.
     match_system_prompt: str | None = None
+    serving: ServingSettings = Field(default_factory=ServingSettings)
 
 
 class GatewayConfig(BaseModel):

@@ -148,9 +148,19 @@ def teacher_augment(
 
 
 @app.command()
-def gateway(config: Path = CONFIG, host: str = "127.0.0.1", port: int = 8000) -> None:
-    """Run the OpenAI-compatible gateway. Point OPENAI_BASE_URL at http://host:port/v1."""
+def gateway(
+    config: Path = CONFIG,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    workers: int = typer.Option(1, help="Worker processes (each loads its own students)"),
+) -> None:
+    """Run the OpenAI-compatible gateway. Point OPENAI_BASE_URL at http://host:port/v1.
+
+    Several workers (or several machines) can share one database: task modes, keys and
+    drift demotion live there. Use Postgres when the gateways are on different machines.
+    """
     import logging
+    import os
 
     import uvicorn
 
@@ -158,7 +168,52 @@ def gateway(config: Path = CONFIG, host: str = "127.0.0.1", port: int = 8000) ->
     from distiller.gateway.config import GatewayConfig
 
     logging.basicConfig(level=logging.INFO)
-    uvicorn.run(create_app(GatewayConfig.load(config)), host=host, port=port)
+    cfg = GatewayConfig.load(config)  # validate before forking workers
+    if workers > 1:
+        os.environ["DISTILLER_CONFIG"] = str(config.resolve())
+        uvicorn.run(
+            "distiller.gateway.app:app_from_env",
+            factory=True,
+            host=host,
+            port=port,
+            workers=workers,
+        )
+    else:
+        uvicorn.run(create_app(cfg), host=host, port=port)
+
+
+@app.command("serve-vllm")
+def serve_vllm(
+    model_dir: Path = typer.Argument(..., help="runs/<task>/models/llm-lora, or a merged export"),
+    port: int = typer.Option(8001),
+    print_only: bool = typer.Option(False, "--print", help="Print the command, do not run it"),
+    extra: list[str] = typer.Argument(None, help="Extra vLLM flags after --"),
+) -> None:
+    """Serve an LLM student with vLLM (GPU). Then set the task's serving.backend: vllm.
+
+    An adapter folder is served as a LoRA on its base model; a merged export (from
+    `distiller export`) is served directly.
+    """
+    import os
+    import shlex
+
+    meta = json.loads((model_dir / "distiller.json").read_text())
+    if meta["backend"] != "llm-lora":
+        raise typer.BadParameter("only llm-lora students can be served by vLLM")
+    name = meta["spec"]["name"]
+    if (model_dir / "adapter_config.json").exists():
+        cmd = [
+            "vllm", "serve", meta["hparams"]["model"],
+            "--enable-lora", "--lora-modules", f"{name}={model_dir.resolve()}",
+            "--max-lora-rank", str(meta["hparams"].get("lora_r", 16)),
+        ]  # fmt: skip
+    else:
+        cmd = ["vllm", "serve", str(model_dir.resolve()), "--served-model-name", name]
+    cmd += ["--port", str(port), *(extra or [])]
+    print(shlex.join(cmd))
+    print(f"Gateway config:  tasks.{name}.serving: {{backend: vllm, url: http://<host>:{port}/v1}}")
+    if not print_only:
+        os.execvp(cmd[0], cmd)
 
 
 @logs_app.command("export")
