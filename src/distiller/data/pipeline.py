@@ -1,12 +1,11 @@
 """prepare(spec): raw file -> clean, split dataset on disk + data report."""
 
+import random
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-
-import random
 
 from distiller.data.dedup import near_duplicate_groups, normalize, remove_exact_duplicates
 from distiller.data.io import Example, load_examples, read_jsonl, write_jsonl
@@ -92,7 +91,9 @@ def prepare(spec: TaskSpec) -> PreparedData:
                 f"{len(report.missing_labels)} labels in task.yaml never appear in the data."
             )
         if counts and max(counts.values()) > 0.5 * len(examples):
-            report.warnings.append("One label covers over half the data; watch macro-F1, not just accuracy.")
+            report.warnings.append(
+                "One label covers over half the data; watch macro-F1, not just accuracy."
+            )
 
     if report.conflicting_inputs > 0.02 * max(len(examples), 1):
         report.warnings.append(

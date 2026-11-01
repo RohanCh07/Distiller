@@ -12,16 +12,17 @@ Fails open: if anything in Distiller breaks, the request goes straight to the te
 
 import asyncio
 import json
-from contextlib import asynccontextmanager
 import logging
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from distiller.data.io import input_from_messages, serialize_output
@@ -33,6 +34,10 @@ from distiller.storage.db import Store
 from distiller.tasks.identify import identify
 
 log = logging.getLogger("distiller.gateway")
+
+
+class ModeUpdate(BaseModel):
+    mode: Mode
 
 
 def _parse_teacher(spec: TaskSpec, content: str) -> Any:
@@ -71,12 +76,15 @@ def _resolve_model_dir(task: str, settings: TaskSettings):
     return settings.model_dir
 
 
-def create_app(config: GatewayConfig) -> FastAPI:
+def create_app(config: GatewayConfig, transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
+    """transport: optional httpx transport for the upstream API (tests use a mock)."""
     store = Store(config.database)
     students: dict[str, Any] = {}
     background: set[asyncio.Task] = set()
     teacher = httpx.AsyncClient(
-        base_url=config.teacher.base_url.rstrip("/"), timeout=config.teacher.timeout_seconds
+        base_url=config.teacher.base_url.rstrip("/"),
+        timeout=config.teacher.timeout_seconds,
+        transport=transport,
     )
 
     def load_students() -> None:
@@ -119,7 +127,11 @@ def create_app(config: GatewayConfig) -> FastAPI:
             r = await teacher.post("/chat/completions", json=body, headers=headers)
         except httpx.HTTPError as e:
             log.error("teacher unreachable: %s", e)
-            return 502, {"error": {"message": f"teacher unreachable: {e}", "type": "bad_gateway"}}, 0.0
+            return (
+                502,
+                {"error": {"message": f"teacher unreachable: {e}", "type": "bad_gateway"}},
+                0.0,
+            )
         ms = 1000 * (time.perf_counter() - start)
         try:
             data = r.json()
@@ -218,10 +230,15 @@ def create_app(config: GatewayConfig) -> FastAPI:
                 if ans.confident:
                     audited = should_audit(config)
                     call_id = store.log_call(
-                        task=task, mode=mode.value, route="student", audited=int(audited),
-                        input=text, request=messages,
+                        task=task,
+                        mode=mode.value,
+                        route="student",
+                        audited=int(audited),
+                        input=text,
+                        request=messages,
                         student_output=serialize_output(ans.output),
-                        student_confidence=ans.confidence, student_ms=ms,
+                        student_confidence=ans.confidence,
+                        student_ms=ms,
                     )
                     if audited:
                         spawn(audit(task, call_id, body, headers, ans.output))
@@ -230,7 +247,9 @@ def create_app(config: GatewayConfig) -> FastAPI:
                     return resp
                 route = "fallback"
                 student_fields = {
-                    "student_output": serialize_output(ans.output) if ans.output is not None else None,
+                    "student_output": serialize_output(ans.output)
+                    if ans.output is not None
+                    else None,
                     "student_confidence": ans.confidence,
                     "student_ms": ms,
                 }
@@ -244,8 +263,13 @@ def create_app(config: GatewayConfig) -> FastAPI:
         fields = teacher_fields(status, data, ms)
         try:
             call_id = store.log_call(
-                task=task, mode=mode.value, route=route, input=text, request=messages,
-                **fields, **student_fields,
+                task=task,
+                mode=mode.value,
+                route=route,
+                input=text,
+                request=messages,
+                **fields,
+                **student_fields,
             )
             if mode == Mode.shadow and has_student and status == 200:
                 spawn(shadow_compare(task, call_id, text, fields.get("teacher_output")))
@@ -261,8 +285,8 @@ def create_app(config: GatewayConfig) -> FastAPI:
         return Response(r.content, status_code=r.status_code, media_type="application/json")
 
     @app.post("/admin/tasks/{task}/mode")
-    async def set_mode(task: str, payload: dict):
-        mode = Mode(payload["mode"])
+    async def set_mode(task: str, payload: ModeUpdate):
+        mode = payload.mode
         store.set_mode(task, mode.value, reason="admin api")
         return {"task": task, "mode": mode.value}
 
@@ -280,6 +304,7 @@ def create_app(config: GatewayConfig) -> FastAPI:
 
     app.state.store = store
     app.state.students = students
+    app.state.background = background
     return app
 
 
@@ -317,4 +342,4 @@ td,th{{border-bottom:1px solid #ddd;padding:6px 12px;text-align:left}}th{{backgr
 <table><tr><th>Task</th><th>Mode (✓ student loaded)</th><th>Calls</th><th>Served by student</th>
 <th>Fallbacks</th><th>Shadow agreement (n)</th><th>Audit agreement (n)</th>
 <th>Latency ms teacher / student</th><th>Teacher tokens avoided (est.)</th></tr>{rows}</table>
-<h2>Events</h2><ul>{events or '<li>none</li>'}</ul></body></html>"""
+<h2>Events</h2><ul>{events or "<li>none</li>"}</ul></body></html>"""

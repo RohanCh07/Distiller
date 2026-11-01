@@ -44,3 +44,12 @@ build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+# B008: typer declares CLI arguments as function defaults.
+ignore = ["B008", "B905", "UP042", "E501"]  # E501: ruff format wraps code; long strings stay
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: trains tiny models end to end (seconds to a minute on CPU)"]

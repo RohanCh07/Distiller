@@ -42,7 +42,8 @@ class TeacherConfig:
             raise ValueError("Set DISTILLER_TEACHER_MODEL or pass --model")
         return cls(
             base_url=os.environ.get("DISTILLER_TEACHER_BASE_URL", "https://api.openai.com/v1"),
-            api_key=os.environ.get("DISTILLER_TEACHER_API_KEY") or os.environ.get("OPENAI_API_KEY", ""),
+            api_key=os.environ.get("DISTILLER_TEACHER_API_KEY")
+            or os.environ.get("OPENAI_API_KEY", ""),
             model=model,
         )
 
@@ -99,7 +100,9 @@ class Teacher:
                 return None
         return text.strip().strip('"').strip()
 
-    def label(self, spec: TaskSpec, inputs: list[str], labels: list[str] | None = None) -> list[Any]:
+    def label(
+        self, spec: TaskSpec, inputs: list[str], labels: list[str] | None = None
+    ) -> list[Any]:
         """Teacher outputs for each input; None where the answer failed validation."""
         labels = labels or spec.labels
         system = self._system_prompt(spec, labels)
@@ -107,7 +110,9 @@ class Teacher:
 
         def one(text: str) -> Any:
             try:
-                raw = self.chat([{"role": "system", "content": system}, {"role": "user", "content": text}])
+                raw = self.chat(
+                    [{"role": "system", "content": system}, {"role": "user", "content": text}]
+                )
             except httpx.HTTPError:
                 return None
             out = self._parse(spec, raw)
@@ -120,7 +125,9 @@ class Teacher:
 
     # ---------- synthetic data ----------
 
-    def _write_inputs(self, spec: TaskSpec, seeds: list[str], n: int, target: str | None) -> list[str]:
+    def _write_inputs(
+        self, spec: TaskSpec, seeds: list[str], n: int, target: str | None
+    ) -> list[str]:
         shown = "\n".join(f"- {s}" for s in random.sample(seeds, min(8, len(seeds))))
         goal = f' whose correct answer is "{target}"' if target else ""
         prompt = (

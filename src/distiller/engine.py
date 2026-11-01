@@ -67,8 +67,10 @@ def _run_candidate(spec, backend, prepared: PreparedData, sweep: bool, log) -> C
     best: _Trial | None = None
     for i, override in enumerate(settings):
         hp = {**base_hp, **override}
-        log(f"[{backend}] trial {i + 1}/{len(settings)} {override or '(preset)'} "
-            f"on {len(prepared.train)} examples")
+        log(
+            f"[{backend}] trial {i + 1}/{len(settings)} {override or '(preset)'} "
+            f"on {len(prepared.train)} examples"
+        )
         trial = _train_trial(spec, cls, hp, prepared, model_dir / f"trial{i}", log)
         if sweep:
             result.sweep.append({"params": override or "preset", "val_score": trial.val_score})

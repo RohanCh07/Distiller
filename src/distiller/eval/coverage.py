@@ -55,7 +55,9 @@ class ThresholdChoice:
         return d
 
 
-def choose_threshold(conf: list[float], correct: list[bool], min_accuracy: float) -> ThresholdChoice:
+def choose_threshold(
+    conf: list[float], correct: list[bool], min_accuracy: float
+) -> ThresholdChoice:
     order = np.argsort(conf)[::-1]
     s = np.asarray(conf, dtype=float)[order]
     c = np.asarray(correct, dtype=int)[order]
@@ -72,7 +74,9 @@ def choose_threshold(conf: list[float], correct: list[bool], min_accuracy: float
     return best
 
 
-def apply_threshold(choice: ThresholdChoice, conf: list[float], correct: list[bool]) -> ThresholdChoice:
+def apply_threshold(
+    choice: ThresholdChoice, conf: list[float], correct: list[bool]
+) -> ThresholdChoice:
     kept = [ok for s, ok in zip(conf, correct) if s >= choice.threshold]
     choice.test_examples_kept = len(kept)
     choice.test_coverage = len(kept) / max(len(conf), 1)
