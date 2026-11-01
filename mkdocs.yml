@@ -33,6 +33,7 @@ nav:
       - Quickstart: quickstart.md
       - Working without a GPU: NO_GPU.md
       - Testing on Kaggle: TESTING.md
+      - Test results: RESULTS.md
   - Guides:
       - Gateway: gateway.md
       - Security: security.md
