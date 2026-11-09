@@ -47,5 +47,5 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pip install -e ".[gateway,train]" pytest
+      - run: pip install -e ".[gateway,train]" pytest "transformers==5.22.1"
       - run: pytest -m slow -q
