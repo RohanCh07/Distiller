@@ -25,6 +25,28 @@ from distiller.training.base import Prediction, Student, warmup_steps
 IGNORE = -100
 
 
+def parse_output(spec, text: str) -> Any:
+    """Generated text -> output, or None if it is not a valid answer for the spec.
+
+    Shared by local generation and remote (vLLM) serving, so both judge outputs alike.
+    """
+    text = text.strip()
+    if spec.type == TaskType.extraction:
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(value, dict):
+            return None
+        if spec.output_schema:
+            try:
+                jsonschema.validate(value, spec.output_schema)
+            except jsonschema.ValidationError:
+                return None
+        return value
+    return text or None
+
+
 class LoraLLMStudent(Student):
     name = "llm-lora"
     supports = (TaskType.classification, TaskType.extraction, TaskType.generation)
@@ -189,21 +211,7 @@ class LoraLLMStudent(Student):
     # ---------- inference ----------
 
     def _parse(self, text: str) -> Any:
-        text = text.strip()
-        if self.spec.type == TaskType.extraction:
-            try:
-                value = json.loads(text)
-            except json.JSONDecodeError:
-                return None
-            if not isinstance(value, dict):
-                return None
-            if self.spec.output_schema:
-                try:
-                    jsonschema.validate(value, self.spec.output_schema)
-                except jsonschema.ValidationError:
-                    return None
-            return value
-        return text or None
+        return parse_output(self.spec, text)
 
     def _constraint(self):
         """prefix_allowed_tokens_fn forcing schema-valid JSON, or None if unavailable."""

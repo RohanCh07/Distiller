@@ -43,7 +43,7 @@ report.md + best.json
 
 ```
 POST /v1/chat/completions
-  stream? ─────────────────────────────► passthrough
+  auth: X-Distiller-Key or Bearer dk-... (required if security.require_api_key / hosted)
   task = header | system-prompt match | unassigned:<hash>
   mode = DB override | distiller.yaml | observe
   off     → teacher
@@ -52,6 +52,8 @@ POST /v1/chat/completions
   serve   → student; confident & valid? → answer (2% audited by teacher in background,
                                            auto-demote to shadow on drift)
                      else → teacher, logged as fallback (new training data)
+  stream: student answer sent as chunks; teacher streams relayed and captured for logging
+  PII scrubbed (and content encrypted) before storage; drift → shadow + retrain job
   any internal error → teacher (fail open)
 ```
 
@@ -80,8 +82,15 @@ POST /v1/chat/completions
 | `gateway/app.py` | FastAPI app: proxy, modes, audits, `/stats`, `/dashboard`, admin API |
 | `tasks/identify.py` | Which task a request belongs to |
 | `router/policy.py` | Audit sampling, drift check / auto-demotion |
-| `storage/db.py` | SQLite: calls, task modes, events, export |
-| `cli.py` | All `distiller ...` commands |
+| `storage/db.py` | SQLite or Postgres: calls, modes, events, keys, retrain jobs, accounts, invoices |
+| `tasks/discover.py` | Find distillable tasks in untagged traffic |
+| `security/` | API keys (`keys.py`), PII scrubbing (`pii.py`), encryption at rest (`crypto.py`) |
+| `serving/registry.py` | `LoadedStudent` (in-process) and `RemoteStudent` (vLLM) |
+| `automation/retrain.py` | Retrain jobs: original + logged data, publish if promotable |
+| `hosted/billing.py` | Share-of-savings invoices per account and month |
+| `onboarding.py` | `distiller init` and `distiller doctor` |
+| `gateway/static/dashboard.html` | The dashboard (reads `/stats`, `/stats/timeseries`) |
+| `cli.py` | All `distiller ...` commands (reference: docs/cli.md) |
 
 ## Commands
 
@@ -97,3 +106,9 @@ POST /v1/chat/completions
 | `distiller task mode <task> <mode> -c distiller.yaml` | Switch mode live |
 | `distiller logs export <task> --out data.jsonl` | Logged traffic → training data |
 | `distiller logs stats` | Per-task traffic and agreement |
+| `distiller init` / `distiller doctor` | Set up / check a project |
+| `distiller keys create/list/revoke` | Gateway API keys |
+| `distiller task discover` | Tasks hiding in untagged traffic |
+| `distiller retrain <task>` / `retrain-worker` | Queue / run retrains |
+| `distiller serve-vllm <model_dir>` | Serve an LLM student with vLLM |
+| `distiller accounts ...` / `billing ...` | Hosted tier |
