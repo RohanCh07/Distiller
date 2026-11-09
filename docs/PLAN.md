@@ -41,9 +41,13 @@ Milestones are small on purpose. Each ends with something you can run and see.
 - Gateway (passthrough + logging), shadow mode, router with fallback, drift checks.
 - Reuses the M1-M5 engine; the gateway only supplies data and serves the exported model.
 
+> **Status (2026-11-01):** test suite (unit, gateway integration, CPU end to end) and CI added;
+> real Banking77 run with a RoBERTa-base encoder: 91.8% accuracy, 93.1% of traffic kept at 95.2%
+> agreement. See [RESULTS.md](RESULTS.md).
+
 ## Next steps (testing phase)
-1. Unit tests: data pipeline (dedup, split leakage), eval math (ECE, Wilson bound, threshold), gateway modes with a fake teacher.
-2. Kaggle run on Banking77 (`notebooks/train_kaggle.ipynb`); read `runs/banking77/report.md`.
+1. ~~Unit tests: data pipeline (dedup, split leakage), eval math (ECE, Wilson bound, threshold), gateway modes with a fake teacher.~~ Done.
+2. ~~Banking77 run~~ done on CPU with the encoder (RESULTS.md); the llm-lora student still needs the Kaggle GPU run.
 3. Transactions: label a few hundred real messages, augment, train, check JSON validity.
 4. Gateway against a real API: observe → shadow → serve on Banking77, watch `/dashboard`.
 5. Later: automatic task discovery for `unassigned:*` traffic, streaming from students, Postgres.

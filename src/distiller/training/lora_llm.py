@@ -44,7 +44,9 @@ class LoraLLMStudent(Student):
 
     def _encode_prompt(self, text: str) -> list[int]:
         # Chat templates already contain their special tokens as text.
-        return self.tokenizer(text, add_special_tokens=not self.tokenizer.chat_template)["input_ids"]
+        return self.tokenizer(text, add_special_tokens=not self.tokenizer.chat_template)[
+            "input_ids"
+        ]
 
     def _encode_train(self, ex: Example) -> dict[str, list[int]]:
         answer = self.tokenizer(serialize_output(ex.output), add_special_tokens=False)["input_ids"]
@@ -94,7 +96,9 @@ class LoraLLMStudent(Student):
         if (model_dir / "adapter_config.json").exists():
             from peft import PeftModel
 
-            base = AutoModelForCausalLM.from_pretrained(self.hparams["model"], **self._model_kwargs())
+            base = AutoModelForCausalLM.from_pretrained(
+                self.hparams["model"], **self._model_kwargs()
+            )
             self.model = PeftModel.from_pretrained(base, model_dir)
         else:  # merged export
             self.model = AutoModelForCausalLM.from_pretrained(model_dir, **self._model_kwargs())
@@ -161,6 +165,7 @@ class LoraLLMStudent(Student):
             fp16=cuda and self.dtype == torch.float16,
             logging_steps=25,
             report_to="none",
+            dataloader_pin_memory=cuda,
             remove_unused_columns=False,
         )
         trainer = Trainer(
@@ -246,7 +251,8 @@ class LoraLLMStudent(Student):
                     max_length=self.hparams["max_length"],
                     add_special_tokens=not self.tokenizer.chat_template,
                 ).to(device)
-                def generate(**extra):
+
+                def generate(enc=enc, **extra):
                     return self.model.generate(
                         input_ids=enc["input_ids"],
                         attention_mask=enc["attention_mask"],
@@ -265,9 +271,13 @@ class LoraLLMStudent(Student):
                         out = generate()
                 else:
                     out = generate()
-                scores = self.model.compute_transition_scores(
-                    out.sequences, out.scores, normalize_logits=True
-                ).float().cpu()
+                scores = (
+                    self.model.compute_transition_scores(
+                        out.sequences, out.scores, normalize_logits=True
+                    )
+                    .float()
+                    .cpu()
+                )
                 generated = out.sequences[:, enc["input_ids"].shape[1] :].cpu()
                 for tokens, logprobs in zip(generated.tolist(), scores.tolist()):
                     n = tokens.index(eos) + 1 if eos in tokens else len(tokens)
@@ -289,7 +299,9 @@ class LoraLLMStudent(Student):
     def export_merged(self, out_dir: Path) -> None:
         """Fold the adapter into the base weights: one standalone model for vLLM/llama.cpp."""
         out_dir.mkdir(parents=True, exist_ok=True)
-        merged = self.model.merge_and_unload() if hasattr(self.model, "merge_and_unload") else self.model
+        merged = (
+            self.model.merge_and_unload() if hasattr(self.model, "merge_and_unload") else self.model
+        )
         merged.save_pretrained(out_dir)
         self.tokenizer.save_pretrained(out_dir)
         self._write_meta(out_dir)

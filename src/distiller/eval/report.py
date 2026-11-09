@@ -49,7 +49,10 @@ def _headline(spec: TaskSpec, metrics: dict[str, Any]) -> str:
 
 
 def write_report(
-    spec: TaskSpec, data_report: DataReport, results: list[CandidateResult], best: CandidateResult | None
+    spec: TaskSpec,
+    data_report: DataReport,
+    results: list[CandidateResult],
+    best: CandidateResult | None,
 ) -> Path:
     run_dir = spec.run_dir
     run_dir.mkdir(parents=True, exist_ok=True)

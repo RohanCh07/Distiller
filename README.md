@@ -40,6 +40,14 @@ Export logged traffic for retraining with `distiller logs export banking77 --out
 Install extras: `[train]` models, `[gateway]` server, `[constrained]` schema-forced JSON
 (pins transformers 4.x), `[quant]` 4-bit training on CUDA.
 
+## Tests
+
+```bash
+pip install -e ".[gateway,train]" pytest
+pytest -m "not slow"     # unit + gateway integration, seconds, no torch needed
+pytest -m slow           # CLI end to end with tiny offline models (CPU, ~1-2 min)
+```
+
 ## Docs
 
 - [docs/GOAL.md](docs/GOAL.md): vision and scope
@@ -47,6 +55,7 @@ Install extras: `[train]` models, `[gateway]` server, `[constrained]` schema-for
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): engine flow and code map
 - [docs/DECISIONS.md](docs/DECISIONS.md): every design decision and why
 - [docs/NO_GPU.md](docs/NO_GPU.md): working without owning a GPU
+- [docs/RESULTS.md](docs/RESULTS.md): test suite and the Banking77 run
 
 ## Layout
 

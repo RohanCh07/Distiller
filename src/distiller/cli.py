@@ -69,7 +69,9 @@ def predict(
     student = LoadedStudent(model_dir)
     for t, ans in zip(text, student.answer(text)):
         route = "student" if ans.confident else "teacher (low confidence)"
-        print(f"{t!r}\n  -> {serialize_output(ans.output)}  conf={ans.confidence:.3f}  route={route}")
+        print(
+            f"{t!r}\n  -> {serialize_output(ans.output)}  conf={ans.confidence:.3f}  route={route}"
+        )
 
 
 @app.command()
