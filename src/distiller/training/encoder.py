@@ -25,11 +25,16 @@ class EncoderStudent(Student):
             DataCollatorWithPadding,
             Trainer,
             TrainingArguments,
+            set_seed,
         )
 
         hp = self.hparams
         label2id = {lbl: i for i, lbl in enumerate(self.labels)}
         self.tokenizer = AutoTokenizer.from_pretrained(hp["model"])
+        # The classification head is freshly initialised here, before Trainer seeds the run,
+        # so seed now: otherwise the head depends on whatever touched the global RNG earlier.
+        seed = self.spec.data.seed
+        set_seed(seed)
         self.model = AutoModelForSequenceClassification.from_pretrained(
             hp["model"],
             num_labels=len(self.labels),
@@ -63,6 +68,7 @@ class EncoderStudent(Student):
             fp16=torch.cuda.is_available(),
             logging_steps=50,
             report_to="none",
+            seed=seed,
             dataloader_pin_memory=torch.cuda.is_available(),
         )
         trainer = Trainer(

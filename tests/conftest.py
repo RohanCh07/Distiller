@@ -105,6 +105,7 @@ def tiny_encoder(tmp_path_factory) -> str:
     """A 2-layer BERT with a WordPiece vocab trained on the test corpus."""
     pytest.importorskip("torch")
     pytest.importorskip("transformers")
+    import torch
     from tokenizers import Tokenizer, models, normalizers, pre_tokenizers, processors, trainers
     from transformers import BertConfig, BertModel, PreTrainedTokenizerFast
 
@@ -138,6 +139,7 @@ def tiny_encoder(tmp_path_factory) -> str:
         intermediate_size=64,
         max_position_embeddings=128,
     )
+    torch.manual_seed(0)  # random weights, but the same ones on every run
     BertModel(config).save_pretrained(out)
     return str(out)
 

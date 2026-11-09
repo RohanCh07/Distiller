@@ -3,6 +3,8 @@ name = "distiller"
 version = "0.2.0"
 description = "Turn repetitive LLM tasks into small, cheap, calibrated models"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.27",
