@@ -166,7 +166,7 @@ def ask(client, text="my card has not arrived", tagged=True, **extra):
 
 
 def calls(app):
-    return [dict(r) for r in app.state.store._db.execute("SELECT * FROM calls ORDER BY id")]
+    return app.state.store.query("SELECT * FROM calls ORDER BY id")
 
 
 def wait_background(app, timeout=5.0):
@@ -368,13 +368,94 @@ def test_untagged_requests_identified_by_system_prompt_or_hash(gateway):
     assert tasks[1].startswith("unassigned:")
 
 
-def test_streaming_is_passed_through(gateway):
-    client, app, up = gateway("serve", student=FakeStudent())
-    r = ask(client, stream=True)
-    assert r.status_code == 200
+def _sse_events(text: str) -> list:
+    out = []
+    for line in text.splitlines():
+        if line.startswith("data: "):
+            payload = line[6:]
+            out.append(payload if payload == "[DONE]" else json.loads(payload))
+    return out
+
+
+def _streamed_text(events) -> str:
+    return "".join(
+        (c["delta"].get("content") or "") for e in events if e != "[DONE]" for c in e["choices"]
+    )
+
+
+def test_stream_served_by_confident_student(gateway):
+    client, app, up = gateway(
+        "serve", student=FakeStudent(output="card_arrival_and_more_text"), audit_rate=0
+    )
+    r = ask(client, stream=True, stream_options={"include_usage": True})
+    assert r.status_code == 200 and r.headers["x-distiller-route"] == "student"
     assert r.headers["content-type"].startswith("text/event-stream")
+    events = _sse_events(r.text)
+    assert events[-1] == "[DONE]"
+    assert events[0]["choices"][0]["delta"]["role"] == "assistant"
+    assert all(e["object"] == "chat.completion.chunk" for e in events[:-1])
+    assert _streamed_text(events) == "card_arrival_and_more_text"
+    finish = [e for e in events[:-1] if e["choices"] and e["choices"][0]["finish_reason"]]
+    assert finish[0]["choices"][0]["finish_reason"] == "stop"
+    assert events[-2]["usage"]["total_tokens"] == 0 and events[-2]["choices"] == []
+    assert up.chat_calls() == []
+    assert calls(app)[0]["route"] == "student"
+
+
+def test_stream_fallback_relays_teacher_and_logs_it(gateway):
+    client, app, up = gateway("serve", student=FakeStudent(output="top_up", confidence=0.2))
+    r = ask(client, stream=True)
+    assert r.headers["x-distiller-route"] == "fallback"
+    assert _streamed_text(_sse_events(r.text)) == "card_arrival"
+    assert up.chat_calls()[0]["body"]["stream"] is True  # the teacher streamed too
+    [row] = calls(app)
+    assert row["route"] == "fallback" and row["streamed"] == 1
+    assert row["teacher_output"] == "card_arrival" and row["student_output"] == "top_up"
+
+
+def test_stream_shadow_compares_in_background(gateway):
+    client, app, _ = gateway("shadow", student=FakeStudent(output="card_arrival"))
+    r = ask(client, stream=True)
+    assert r.headers["x-distiller-route"] == "teacher"
+    wait_background(app)
+    [row] = calls(app)
+    assert row["teacher_output"] == "card_arrival" and row["agree"] == 1
+
+
+def test_stream_off_mode_is_plain_passthrough(gateway):
+    client, app, _ = gateway("off")
+    r = ask(client, stream=True)
     assert "card_" in r.text and "[DONE]" in r.text
-    assert calls(app) == []  # streaming bypasses routing for now
+    assert calls(app) == []
+
+
+def test_stream_audit_uses_non_streaming_call(gateway):
+    client, app, up = gateway("serve", student=FakeStudent(), audit_rate=1)
+    ask(client, stream=True, stream_options={"include_usage": True})
+    wait_background(app)
+    body = up.chat_calls()[0]["body"]
+    assert "stream" not in body and "stream_options" not in body
+    assert calls(app)[0]["agree"] == 1
+
+
+def test_openai_sdk_compatibility(gateway):
+    """The official OpenAI SDK talks to the gateway unchanged, streaming or not."""
+    openai = pytest.importorskip("openai")
+    client, app, _ = gateway("serve", student=FakeStudent(confidence=0.95), audit_rate=0)
+    sdk = openai.OpenAI(base_url="http://testserver/v1", api_key="sk-x", http_client=client)
+    msgs = [{"role": "user", "content": "my card has not arrived"}]
+    extra = {"extra_headers": {"X-Distiller-Task": "banking77"}}
+    reply = sdk.chat.completions.create(model="big-model", messages=msgs, **extra)
+    assert reply.choices[0].message.content == "card_arrival"
+    chunks = list(
+        sdk.chat.completions.create(model="big-model", messages=msgs, stream=True, **extra)
+    )
+    assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "card_arrival"
+    app.state.students["banking77"].confidence = 0.1  # now the teacher answers, streamed
+    chunks = list(
+        sdk.chat.completions.create(model="big-model", messages=msgs, stream=True, **extra)
+    )
+    assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "card_arrival"
 
 
 def test_models_endpoint_proxied(gateway):
@@ -400,7 +481,7 @@ def test_admin_rejects_unknown_mode(gateway):
     assert app.state.store.get_mode("banking77") is None
 
 
-def test_dashboard_renders_numbers(gateway):
+def test_dashboard_page_and_its_data(gateway):
     client, app, _ = gateway("serve", student=FakeStudent(), audit_rate=0)
     for _ in range(3):
         ask(client)
@@ -408,18 +489,18 @@ def test_dashboard_renders_numbers(gateway):
     ask(client)
     wait_background(app)
     html = client.get("/dashboard").text
-    assert html.startswith("<!doctype html>")
-    assert "<td>banking77</td>" in html and "shadow ✓" in html
-    assert "<td>4</td>" in html  # calls
-    assert "75.0%" in html  # served by student
-    assert "shadow (admin api)" in html  # event list
+    assert html.startswith("<!doctype html>") and "/stats/timeseries" in html
+    stats = client.get("/stats").json()
+    t = stats["tasks"][0]
+    assert t["task"] == "banking77" and t["mode"] == "shadow" and t["has_student"]
+    assert t["calls"] == 4 and t["served_by_student"] == 3
+    assert t["teacher_prompt_tokens"] == 20 and t["teacher_completion_tokens"] == 3
+    assert "shadow (admin api)" in stats["events"][0]["detail"]
+    series = client.get("/stats/timeseries?hours=1&bucket=60").json()
+    by_route = {p["route"]: p["calls"] for p in series["points"]}
+    assert series["bucket"] == 60 and by_route == {"student": 3, "teacher": 1}
+    assert all(p["bucket"] % 60 == 0 for p in series["points"])
     assert client.get("/health").json() == {"ok": True, "students": ["banking77"]}
-
-
-def test_dashboard_with_no_traffic(gateway):
-    client, _, _ = gateway()
-    html = client.get("/dashboard").text
-    assert "<li>none</li>" in html
 
 
 def test_exported_logs_are_valid_training_data(gateway, tmp_path):

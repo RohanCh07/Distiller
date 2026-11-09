@@ -170,3 +170,77 @@ Any error in Distiller (routing, student, logging) sends the request to the teac
 **Decision:** The student's input for a chat request is all user turns joined (`input_from_messages`), used both when reading logged traffic and when serving. The system prompt is replaced by the task's `instruction`.
 
 **Why:** Any mismatch between training and serving inputs silently lowers accuracy.
+
+## 24. Tests run offline, on SQLite and Postgres (2026-11-01)
+
+**Decision:** Unit, integration and end-to-end tests need no network: the teacher is a mocked
+HTTP transport or a local fake server, and end-to-end runs train tiny random models whose
+tokenizers are built in the test. Store tests run on SQLite and on a real Postgres started by
+`pgserver`.
+
+**Why:** CI must be fast and deterministic, and "works on SQLite" says nothing about Postgres.
+
+## 25. Gateway API keys: hashed, two ways to send them (2026-11-01)
+
+**Decision:** Keys (`dk-...`) are stored as SHA-256 hashes with a role (app/admin). Apps send them
+as `X-Distiller-Key`, or as `Authorization: Bearer dk-...`, in which case the gateway uses its own
+teacher key upstream. Admin endpoints require an admin key as soon as one exists.
+
+**Why:** `OPENAI_API_KEY=dk-...` makes adoption a one-line change, and a Distiller key must never
+reach the provider. Leaving admin endpoints open until a key exists keeps local trials simple.
+
+## 26. PII is scrubbed before storage, and the student sees the scrubbed text (2026-11-01)
+
+**Decision:** Emails, phones, cards (Luhn), Aadhaar (Verhoeff), PAN, IBAN (mod 97) and IPs are
+replaced by placeholders. The teacher gets the original text; the student gets the scrubbed text.
+
+**Why:** Logs are training data and must not hold personal data. The student must see the same
+input form at serving as in training (#23). Checksums avoid scrubbing reference numbers.
+
+## 27. Encryption at rest for content columns only (2026-11-01)
+
+**Decision:** Fernet-encrypt input, request and output columns; keep numbers in clear. Keys come from
+an env var, comma-separated for rotation.
+
+**Why:** Stats, drift checks and the dashboard work without decrypting; only export and retraining
+read content.
+
+## 28. Streaming: student answers are computed, then streamed (2026-11-01)
+
+**Decision:** For `stream: true`, the student's full answer is computed first and then sent as
+chunks; teacher streams are relayed unchanged and captured for logging.
+
+**Why:** The fallback decision needs the confidence of the whole answer. Student answers are short,
+so the user-visible cost is negligible, and streamed traffic still becomes training data.
+
+## 29. One store for SQLite and Postgres; coordination through the database (2026-11-01)
+
+**Decision:** The same SQL runs on both. Modes, keys, demotion and retrain jobs use conditional
+updates, so any number of gateways and workers can share one database.
+
+**Why:** Several gateways must agree on modes and must not demote or retrain twice. The database is
+already shared, so it is the simplest coordinator; no extra queue or lock service.
+
+## 30. vLLM as a remote student (2026-11-01)
+
+**Decision:** `serving.backend: vllm` calls a vLLM OpenAI-compatible server with `logprobs`; the
+gateway keeps calibration and threshold. Extraction uses `json_schema` response format.
+
+**Why:** LLM students need a GPU and batching; the gateway should stay a light CPU process.
+
+## 31. Retraining is a queued job; publishing needs a promotable model (2026-11-01)
+
+**Decision:** Drift demotion queues a job; `distiller retrain-worker` trains on original plus logged
+data and replaces `best.json` atomically only if the new model reaches the target on some slice.
+Gateways reload changed `best.json` files; tasks stay in shadow unless auto-promotion is enabled.
+
+**Why:** Training never runs inside a gateway, a bad retrain can't replace a good model, and a
+person (or an explicit promotion rule) decides when a new model serves.
+
+## 32. Hosted tier billing: share of net savings, computed from logs (2026-11-01)
+
+**Decision:** Invoice = max(monthly minimum, share × (avoided teacher cost − student serving cost)),
+per account and month, from token averages of teacher-answered calls. No payment provider yet.
+
+**Why:** Customers pay only when Distiller saves them money, which matches the product promise.
+Computing from the call log keeps one source of truth.

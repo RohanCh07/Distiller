@@ -180,3 +180,30 @@ def tiny_llm(tmp_path_factory) -> str:
     )
     LlamaForCausalLM(config).save_pretrained(out)
     return str(out)
+
+
+# ---------- databases: every store test runs on SQLite and on a real Postgres ----------
+
+
+@pytest.fixture(scope="session")
+def pg_server(tmp_path_factory):
+    """A throwaway Postgres server (pgserver ships the binaries), or skip if unavailable."""
+    pgserver = pytest.importorskip("pgserver")
+    pytest.importorskip("psycopg")
+    server = pgserver.get_server(tmp_path_factory.mktemp("pg"), cleanup_mode="stop")
+    yield server
+    server.cleanup()
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def db_url(request, tmp_path):
+    """A fresh, empty database URL: a SQLite file or a new Postgres database."""
+    if request.param == "sqlite":
+        return str(tmp_path / "d.db")
+    import uuid
+
+    server = request.getfixturevalue("pg_server")
+    name = "t_" + uuid.uuid4().hex[:12]
+    server.psql(f"CREATE DATABASE {name};")
+    base = server.get_uri()
+    return base.replace("/postgres?", f"/{name}?", 1)

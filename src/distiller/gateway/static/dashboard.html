@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distiller</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --surface-0: #f4f3ef; --surface-1: #fcfcfb;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --good: #006300; --critical: #d03b3b; --accent: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --good: #0ca30c; --critical: #e66767; --accent: #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.viz-root { background: var(--surface-0); color: var(--text-primary); min-height: 100vh; padding: 24px 32px; }
+header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+.sub { color: var(--text-secondary); }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile .label { color: var(--text-secondary); font-size: 12px; }
+.tile .value { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .note { color: var(--muted); font-size: 12px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--text-secondary); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; }
+select, input, button { font: inherit; color: inherit; background: var(--surface-1); border: 1px solid var(--axis); border-radius: 6px; padding: 4px 8px; }
+button { cursor: pointer; }
+input[type=number] { width: 80px; }
+.legend { display: flex; gap: 16px; color: var(--text-secondary); font-size: 12px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.chart-wrap { position: relative; }
+svg text { fill: var(--muted); font-size: 11px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border);
+       border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; min-width: 150px; }
+.tip b { display: block; margin-bottom: 4px; }
+.tip .r { display: flex; justify-content: space-between; gap: 12px; }
+.mode { font-weight: 600; }
+.ok { color: var(--good); } .bad { color: var(--critical); }
+ul.events { list-style: none; padding: 0; margin: 0; }
+ul.events li { padding: 5px 0; border-bottom: 1px solid var(--grid); color: var(--text-secondary); }
+ul.events time { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+#error { color: var(--critical); }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <h1>Distiller</h1>
+    <span class="sub" id="updated">loading…</span>
+    <span id="error"></span>
+  </header>
+
+  <div class="card row" aria-label="Filters">
+    <label>Task <select id="task"></select></label>
+    <label>Range <select id="hours"><option value="24">24 hours</option><option value="168">7 days</option><option value="720">30 days</option></select></label>
+    <label title="What the teacher model costs you">Teacher USD / 1M tokens: in <input id="pin" type="number" step="0.01" min="0"></label>
+    <label>out <input id="pout" type="number" step="0.01" min="0"></label>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <div class="row" style="justify-content: space-between; margin-bottom: 8px">
+      <h2 id="chart-title" style="margin:0">Calls by route</h2>
+      <div class="row">
+        <div class="legend" id="legend"></div>
+        <button id="toggle-table" type="button">Show table</button>
+      </div>
+    </div>
+    <div class="chart-wrap" id="chart-wrap">
+      <svg id="chart" width="100%" height="240" role="img" aria-label="Calls per time bucket, stacked by route"></svg>
+      <div class="tip" id="tip"></div>
+    </div>
+    <div id="chart-table" class="hidden"></div>
+  </div>
+
+  <div class="card">
+    <h2>Tasks</h2>
+    <div style="overflow-x:auto"><table id="tasks"></table></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h2>Events</h2><ul class="events" id="events"></ul></div>
+    <div class="card"><h2>Retrain jobs</h2><div id="jobs"></div>
+      <h2 style="margin-top:16px">Untagged prompts that could become tasks</h2><div id="discover"></div></div>
+  </div>
+</div>
+
+<script>
+const SERIES = [
+  { key: "student", label: "Student", color: "var(--series-1)" },
+  { key: "fallback", label: "Fallback to teacher", color: "var(--series-2)" },
+  { key: "teacher", label: "Teacher only", color: "var(--series-3)" },
+];
+const params = new URLSearchParams(location.search);
+if (params.get("key")) { sessionStorage.setItem("distillerKey", params.get("key")); history.replaceState(null, "", location.pathname); }
+const KEY = sessionStorage.getItem("distillerKey") || "";
+const $ = (id) => document.getElementById(id);
+const pct = (v) => v == null ? "–" : (100 * v).toFixed(1) + "%";
+const num = (v, d = 0) => v == null ? "–" : Number(v).toLocaleString(undefined, { maximumFractionDigits: d });
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+for (const [id, def] of [["pin", "0.15"], ["pout", "0.60"]]) {
+  $(id).value = localStorage.getItem("distiller." + id) ?? def;
+  $(id).addEventListener("change", () => { localStorage.setItem("distiller." + id, $(id).value); render(); });
+}
+$("hours").addEventListener("change", load);
+$("task").addEventListener("change", render);
+$("toggle-table").addEventListener("click", () => {
+  const t = $("chart-table"), shown = !t.classList.toggle("hidden");
+  $("toggle-table").textContent = shown ? "Hide table" : "Show table";
+});
+$("legend").innerHTML = SERIES.map((s) => `<span><span class="sw" style="background:${s.color}"></span>${s.label}</span>`).join("");
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { "X-Distiller-Key": KEY, "Content-Type": "application/json", ...(opts.headers || {}) } });
+  if (!r.ok) throw new Error(`${path}: ${r.status} ${(await r.json().catch(() => ({})))?.error?.message || ""}`);
+  return r.json();
+}
+
+let state = { stats: null, series: [], discover: [] };
+
+async function load() {
+  try {
+    const hours = Number($("hours").value);
+    const bucket = hours <= 24 ? 3600 : hours <= 168 ? 6 * 3600 : 86400;
+    const [stats, series, disc] = await Promise.all([
+      api("/stats"),
+      api(`/stats/timeseries?hours=${hours}&bucket=${bucket}`),
+      api("/admin/discover?min_calls=50").catch(() => ({ candidates: [] })),
+    ]);
+    state = { stats, series: series.points, bucket, hours, discover: disc.candidates };
+    $("error").textContent = "";
+    $("updated").textContent = "updated " + new Date().toLocaleTimeString();
+    const sel = $("task"), current = sel.value;
+    sel.innerHTML = `<option value="">All tasks</option>` + stats.tasks.map((t) => `<option>${esc(t.task)}</option>`).join("");
+    sel.value = [...sel.options].some((o) => o.value === current) ? current : "";
+    render();
+  } catch (e) {
+    $("error").textContent = e.message.includes("401") || e.message.includes("403")
+      ? "Admin key needed: open /dashboard?key=<admin key>" : e.message;
+  }
+}
+
+function costPerCall(t) {
+  const pin = Number($("pin").value) || 0, pout = Number($("pout").value) || 0;
+  return ((t.teacher_prompt_tokens || 0) * pin + (t.teacher_completion_tokens || 0) * pout) / 1e6;
+}
+
+function render() {
+  if (!state.stats) return;
+  const task = $("task").value;
+  const tasks = state.stats.tasks.filter((t) => !task || t.task === task);
+  const sum = (k) => tasks.reduce((a, t) => a + (t[k] || 0), 0);
+  const calls = sum("calls"), served = sum("served_by_student");
+  const saved = tasks.reduce((a, t) => a + (t.served_by_student || 0) * costPerCall(t), 0);
+  const teacherCost = tasks.reduce((a, t) => a + (t.calls - (t.served_by_student || 0)) * costPerCall(t), 0);
+  $("tiles").innerHTML = [
+    ["Calls", num(calls), task || "all tasks"],
+    ["Served by student", pct(calls ? served / calls : null), `${num(served)} calls`],
+    ["Fallbacks", num(sum("fallbacks")), "student unsure, teacher answered"],
+    ["Teacher spend avoided", "$" + num(saved, 2), `vs $${num(teacherCost, 2)} still spent (est.)`],
+  ].map(([l, v, n]) => `<div class="card tile"><div class="label">${l}</div><div class="value">${v}</div><div class="note">${esc(n)}</div></div>`).join("");
+
+  $("tasks").innerHTML = `<tr><th>Task</th><th>Mode</th><th class="num">Calls</th><th class="num">Student</th>
+    <th class="num">Fallbacks</th><th class="num">Shadow agreement</th><th class="num">Audit agreement</th>
+    <th class="num">Latency teacher / student</th><th class="num">Saved (est.)</th></tr>` +
+    tasks.map((t) => `<tr><td>${esc(t.task)}${t.has_student ? "" : ' <span class="sub">(no student)</span>'}</td>
+      <td><select data-task="${esc(t.task)}" class="mode-select" aria-label="Mode for ${esc(t.task)}">
+        ${["off", "observe", "shadow", "serve"].map((m) => `<option ${m === t.mode ? "selected" : ""}>${m}</option>`).join("")}</select></td>
+      <td class="num">${num(t.calls)}</td><td class="num">${pct(t.calls ? (t.served_by_student || 0) / t.calls : null)}</td>
+      <td class="num">${num(t.fallbacks)}</td>
+      <td class="num">${pct(t.shadow_agreement)} <span class="sub">(${num(t.shadow_samples)})</span></td>
+      <td class="num">${pct(t.audit_agreement)} <span class="sub">(${num(t.audit_samples)})</span></td>
+      <td class="num">${num(t.teacher_ms)} / ${num(t.student_ms, 1)} ms</td>
+      <td class="num">$${num((t.served_by_student || 0) * costPerCall(t), 2)}</td></tr>`).join("");
+  document.querySelectorAll(".mode-select").forEach((el) => el.addEventListener("change", async () => {
+    if (!confirm(`Switch ${el.dataset.task} to ${el.value}?`)) { render(); return; }
+    try { await api(`/admin/tasks/${encodeURIComponent(el.dataset.task)}/mode`, { method: "POST", body: JSON.stringify({ mode: el.value }) }); load(); }
+    catch (e) { $("error").textContent = e.message; }
+  }));
+
+  $("events").innerHTML = state.stats.events.map((e) =>
+    `<li><time>${new Date(e.ts * 1000).toLocaleString()}</time>${esc(e.task)} · ${esc(e.detail)}</li>`).join("") || "<li>none</li>";
+  const jobs = state.stats.retrain_jobs || [];
+  $("jobs").innerHTML = jobs.length ? `<table><tr><th>Task</th><th>Status</th><th>Detail</th></tr>` + jobs.map((j) =>
+    `<tr><td>${esc(j.task)}</td><td>${esc(j.status)}</td><td class="sub">${esc(j.detail || j.reason)}</td></tr>`).join("") + "</table>"
+    : '<p class="sub">none</p>';
+  $("discover").innerHTML = state.discover.length ? `<table><tr><th>Name</th><th>Type</th><th class="num">Calls</th><th>Why</th></tr>` +
+    state.discover.map((c) => `<tr><td>${esc(c.name)}</td><td>${esc(c.type || "not a fit")}</td><td class="num">${num(c.calls)}</td><td class="sub">${esc(c.reason)}</td></tr>`).join("") +
+    `</table><p class="sub">Write task files with <code>distiller task discover --write tasks/</code></p>` : '<p class="sub">none yet</p>';
+  drawChart(task);
+}
+
+function buckets(task) {
+  const end = Math.floor(Date.now() / 1000 / state.bucket) * state.bucket;
+  const n = Math.round(state.hours * 3600 / state.bucket);
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) out.push({ t: end - i * state.bucket, student: 0, fallback: 0, teacher: 0 });
+  const idx = new Map(out.map((b, i) => [b.t, i]));
+  for (const p of state.series) {
+    if (task && p.task !== task) continue;
+    const i = idx.get(p.bucket);
+    if (i !== undefined && p.route in out[i]) out[i][p.route] += p.calls;
+  }
+  return out;
+}
+
+function niceMax(v) {
+  if (v <= 4) return 4;
+  const p = 10 ** Math.floor(Math.log10(v)), m = v / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
+}
+
+function drawChart(task) {
+  const data = buckets(task);
+  const svg = $("chart"), W = svg.clientWidth || 800, H = 240, L = 44, R = 8, T = 10, B = 26;
+  const max = niceMax(Math.max(1, ...data.map((d) => d.student + d.fallback + d.teacher)));
+  const bw = (W - L - R) / data.length, gap = Math.min(2, bw * 0.2);
+  const y = (v) => T + (H - T - B) * (1 - v / max);
+  const fmtT = (t) => { const d = new Date(t * 1000); return state.bucket < 86400 ? d.getHours().toString().padStart(2, "0") + ":00" : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
+  let s = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = (max / 4) * i, yy = y(v);
+    s += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="${i ? "var(--grid)" : "var(--axis)"}" />`;
+    s += `<text x="${L - 6}" y="${yy + 4}" text-anchor="end">${num(v)}</text>`;
+  }
+  const every = Math.ceil(data.length / 8);
+  // Hover columns first, so the highlight sits behind the bars.
+  data.forEach((d, i) => {
+    s += `<rect class="hit" data-i="${i}" x="${L + i * bw}" y="${T}" width="${bw}" height="${H - T - B}" fill="transparent" />`;
+  });
+  data.forEach((d, i) => {
+    const x = L + i * bw + gap / 2, w = Math.max(1, bw - gap);
+    let base = 0;
+    const segs = SERIES.filter((sr) => d[sr.key] > 0);
+    segs.forEach((sr, j) => {
+      const y0 = y(base), y1 = y(base + d[sr.key]);
+      const h = Math.max(0, y0 - y1 - (j < segs.length - 1 ? 0 : 0));
+      const top = j === segs.length - 1, r = Math.min(4, w / 2, h);
+      // 2px surface gap between stacked segments; rounded top on the last segment only.
+      const hh = Math.max(0, h - (j > 0 ? 2 : 0));
+      s += top
+        ? `<path d="M${x},${y1 + hh} V${y1 + r} Q${x},${y1} ${x + r},${y1} H${x + w - r} Q${x + w},${y1} ${x + w},${y1 + r} V${y1 + hh} Z" fill="${sr.color}" pointer-events="none" />`
+        : `<rect x="${x}" y="${y1}" width="${w}" height="${hh}" fill="${sr.color}" pointer-events="none" />`;
+      base += d[sr.key];
+    });
+    if (i % every === 0) s += `<text x="${x + w / 2}" y="${H - 8}" text-anchor="middle">${fmtT(d.t)}</text>`;
+  });
+  svg.innerHTML = s;
+  const tip = $("tip");
+  svg.querySelectorAll(".hit").forEach((el) => {
+    el.addEventListener("mousemove", (ev) => {
+      const d = data[Number(el.dataset.i)], total = d.student + d.fallback + d.teacher;
+      tip.innerHTML = `<b>${new Date(d.t * 1000).toLocaleString()}</b>` + SERIES.map((sr) =>
+        `<div class="r"><span><span class="sw" style="background:${sr.color}"></span>${sr.label}</span><span>${num(d[sr.key])}</span></div>`).join("") +
+        `<div class="r" style="margin-top:4px"><span>Total</span><span>${num(total)}</span></div>`;
+      const box = $("chart-wrap").getBoundingClientRect();
+      const x = ev.clientX - box.left + 14;
+      tip.style.left = Math.min(x, box.width - 170) + "px";
+      tip.style.top = (ev.clientY - box.top - 10) + "px";
+      tip.style.display = "block";
+      el.setAttribute("fill", "var(--grid)"); el.setAttribute("fill-opacity", "0.6");
+    });
+    el.addEventListener("mouseleave", () => { tip.style.display = "none"; el.setAttribute("fill", "transparent"); });
+  });
+  $("chart-title").textContent = `Calls by route${task ? " · " + task : ""}`;
+  $("chart-table").innerHTML = `<table><tr><th>Time</th>${SERIES.map((sr) => `<th class="num">${sr.label}</th>`).join("")}<th class="num">Total</th></tr>` +
+    data.filter((d) => d.student + d.fallback + d.teacher > 0).map((d) => `<tr><td>${new Date(d.t * 1000).toLocaleString()}</td>` +
+    SERIES.map((sr) => `<td class="num">${num(d[sr.key])}</td>`).join("") + `<td class="num">${num(d.student + d.fallback + d.teacher)}</td></tr>`).join("") + "</table>";
+}
+
+window.addEventListener("resize", () => state.stats && drawChart($("task").value));
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>

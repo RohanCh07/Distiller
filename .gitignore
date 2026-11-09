@@ -11,3 +11,4 @@ __pycache__/
 examples/*/data.jsonl
 examples/*/synthetic.jsonl
 /distiller.yaml
+site/
