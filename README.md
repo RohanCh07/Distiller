@@ -78,3 +78,7 @@ Distiller/
 ├── tests/
 └── deploy/
 ```
+
+## License
+
+Apache License 2.0. Copyright 2026 Rohan Chauhan. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
